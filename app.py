@@ -743,42 +743,53 @@ def generate_frames():
                 pass
         frame_queue.put(frame)
 
-        # Copy detection results
+        # Draw all tracked persons
         with detection_lock:
-            kp_xy = latest_detection['kp_xy']
-            kp_conf = latest_detection['kp_conf']
-            is_fall_draw = latest_detection['is_fall']
+            tracks = latest_detection.get('tracks', {})
 
-        if kp_xy is not None and kp_conf is not None:
-            draw_skeleton(frame, kp_xy, kp_conf, is_fall=is_fall_draw)
+        for tid, t in tracks.items():
+            kp = t.get('kp'); kp_conf = t.get('kp_conf')
+            if kp is None or kp_conf is None:
+                continue
+            # Per-person fall state for coloring
+            is_fall_person = t.get('fall_counter', 0) > 0
+            color = t.get('color', (0, 255, 0))
+            pname = t.get('name') or f'ID:{tid}'
+            p_fall_val = t.get('last_p_fall', 0)
+
+            # Draw skeleton with person color
+            for a, b in SKELETON_EDGES:
+                if kp_conf[a] > 0.5 and kp_conf[b] > 0.5:
+                    c = (0, 0, 255) if is_fall_person else color
+                    cv2.line(frame, (int(kp[a][0]), int(kp[a][1])),
+                             (int(kp[b][0]), int(kp[b][1])), c, 2)
+            for i in range(len(kp)):
+                if kp_conf[i] > 0.5:
+                    cx, cy = int(kp[i][0]), int(kp[i][1])
+                    c = (0, 0, 255) if is_fall_person else color
+                    cv2.circle(frame, (cx, cy), 4, c, -1)
+                    cv2.circle(frame, (cx, cy), 5, (255, 255, 255), 1)
+
+            # Name + P_FALL above head
+            bx, by = int(t['bbox'][0]), int(t['bbox'][1])
+            label = f'{pname} | {p_fall_val:.2f}'
+            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+            lx = max(0, bx + int((t['bbox'][2] - t['bbox'][0] - lw) / 2))
+            ly = max(20, by - 8)
+            cv2.putText(frame, label, (lx, ly),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
         # HUD
         cv2.putText(frame, f"FPS: {current_fps}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.putText(frame, f"Persons: {person_count}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        if fall_counter > 0:
-            cv2.putText(frame, f"Fall warn: {fall_counter}/{FALL_CONSECUTIVE_FRAMES}",
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-        p_color = (0, 255, 0) if last_p_fall < FALL_PROB_THRESHOLD else (0, 165, 255)
-        cv2.putText(frame, f"P_FALL: {last_p_fall:.2f}", (10, 115),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, p_color, 1)
+        p_color = (0, 255, 0) if last_p_fall < WARN_PROB_THRESHOLD else (
+            (0, 0, 255) if last_p_fall >= FALL_PROB_THRESHOLD else (0, 165, 255))
+        cv2.putText(frame, f"P_FALL: {last_p_fall:.2f}", (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, p_color, 2)
         cv2.putText(frame, f"Mode: {src[:20]}", (10, frame.shape[0] - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (128, 128, 128), 1)
-
-        # Name
-        with state_lock:
-            display_name = recognized_name
-        if display_name:
-            name_text = f"Current: {display_name}"
-            (tw, _), _ = cv2.getTextSize(name_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-            cv2.putText(frame, name_text, ((frame.shape[1] - tw) // 2, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        else:
-            un_text = "Unrecognized"
-            (tw, _), _ = cv2.getTextSize(un_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.putText(frame, un_text, ((frame.shape[1] - tw) // 2, 28),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
 
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
