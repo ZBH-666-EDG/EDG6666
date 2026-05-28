@@ -599,17 +599,6 @@ def detection_worker():
             latest_frame = frame.copy()
         det_frame_count += 1
 
-        # Face recognition
-        if face_app is not None and det_frame_count % FACE_RECOGNITION_INTERVAL == 0:
-            name, _ = recognize_face(frame, det_frame_count)
-            if name is not None:
-                last_face_match_frame = det_frame_count; held_face_name = name
-        if held_face_name is not None:
-            if det_frame_count - last_face_match_frame > FACE_NAME_HOLD_FRAMES:
-                held_face_name = None
-            with state_lock:
-                recognized_name = held_face_name
-
         # YOLO pose detection
         if det_frame_count % DETECTION_INTERVAL == 0:
             results = model(frame, imgsz=YOLO_IMGSZ, conf=0.5, verbose=False)
@@ -620,6 +609,33 @@ def detection_worker():
                 tracks = _match_or_create_tracks(detections, det_frame_count)
                 with state_lock:
                     person_count = len(tracks)
+
+            # Per-person face recognition (round-robin one person per cycle)
+            if face_app is not None and det_frame_count % FACE_RECOGNITION_INTERVAL == 0:
+                # Pick one unnamed tracked person to try face recognition on
+                for tid, t in tracks.items():
+                    if t.get('name') is None:
+                        bx, by, bw2, bh2 = int(t['bbox'][0]), int(t['bbox'][1]), \
+                            int(t['bbox'][2]), int(t['bbox'][3])
+                        # Expand bbox slightly for face detection
+                        bx = max(0, bx - 20); by = max(0, by - 40)
+                        bw2 = min(frame.shape[1], bw2 + 20)
+                        bh2 = min(frame.shape[0], bh2 + 10)
+                        face_crop = frame[by:bh2, bx:bw2]
+                        if face_crop.size > 0:
+                            name, _ = recognize_face(face_crop, det_frame_count)
+                            if name is not None:
+                                t['name'] = name
+                        break  # only one person per cycle
+
+            # Sync recognized_name from the person with highest confidence
+            named_tracks = [(t.get('name'), t.get('last_p_fall', 0))
+                            for t in tracks.values() if t.get('name')]
+            with state_lock:
+                if named_tracks:
+                    recognized_name = max(named_tracks, key=lambda x: x[1])[0]
+                else:
+                    recognized_name = None
 
             # Process each tracked person independently
             max_p_fall = 0.0
