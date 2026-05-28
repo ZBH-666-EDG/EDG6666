@@ -91,7 +91,7 @@ async function loadList() {
     const resp = await fetch('/api/cameras');
     const cams = await resp.json();
     document.getElementById('camList').innerHTML = cams.map(c => {
-        if (cameraOnMap[c.id] === undefined) cameraOnMap[c.id] = true;
+        if (cameraOnMap[c.id] === undefined) cameraOnMap[c.id] = c.enabled !== false;
         const on = cameraOnMap[c.id];
         return `<div class="cam-row" onclick="toggleCam(${c.id})">
             <div>

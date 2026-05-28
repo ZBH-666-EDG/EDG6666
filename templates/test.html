@@ -64,10 +64,14 @@
             <input type="file" id="videoFile" accept="video/mp4,video/avi,video/mov,video/webm" required>
             <div class="hint">支持 MP4 / AVI / MOV / WebM，上传后自动替换摄像头画面进行跌倒检测测试</div>
         </div>
-        <button type="submit" class="btn-submit" id="btnSubmit" onclick="return false;">上传并开始测试</button>
+        <button type="button" class="btn-submit" id="btnSubmit" onclick="doUpload()">上传并开始测试</button>
     </form>
-    <button class="btn-reset" onclick="resetTest()">恢复摄像头模式</button>
+    <button class="btn-reset" onclick="resetTest()">清除测试视频</button>
     <div id="message" class="message"></div>
+
+    <div style="margin-top:20px; border:2px solid #2a4a5c; border-radius:8px; overflow:hidden; background:#000;">
+        <img id="testPreview" src="/test_feed" style="display:block; width:100%;">
+    </div>
 </div>
 <script>
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
@@ -99,7 +103,7 @@ async function doUpload() {
         const data = await resp.json();
         if (data.ok) {
             msg.className = 'message success';
-            msg.innerHTML = `${data.message}<br>请切到 <a href="/" style="color:#4fc3f7;">监控页面</a> 查看（刷新后视频自动播放）`;
+            msg.innerHTML = '视频已加载，下方画面查看检测效果';
         } else {
             msg.className = 'message error'; msg.textContent = data.error;
         }

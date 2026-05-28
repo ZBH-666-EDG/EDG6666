@@ -96,8 +96,8 @@ current_fps_list = {}
 person_count_list = {}
 last_p_fall_list = {}
 camera_enabled = {}  # id -> bool, whether camera is actively streaming
-video_source = 'camera'
-video_source_lock = threading.Lock()
+test_video_path = None
+test_video_lock = threading.Lock()
 
 face_app = None
 try:
@@ -728,8 +728,8 @@ def open_camera(source):
 
 def generate_frames(cam_id):
     """MJPEG stream generator for a specific camera."""
-    cam = open_camera(CAMERAS[cam_id]['source'])
     fq = frame_queues[cam_id]
+    cam = open_camera(CAMERAS[cam_id]['source'])
     dl = detection_locks[cam_id]
     ld = latest_detections[cam_id]
     fc_start = time.time(); fc_count = 0
@@ -888,11 +888,13 @@ def video_feed_cam(cam_id):
 
 @app.route('/capture_frame')
 def capture_frame():
-    """Capture from camera 0 (used by registration)."""
-    cam = open_camera(CAMERAS[0]['source'])
-    success, frame = cam.read()
-    cam.release()
-    if not success or frame is None:
+    """Capture from camera 0 frame queue (used by registration)."""
+    fq = frame_queues.get(0)
+    if fq is None:
+        return Response(b'', status=503)
+    try:
+        frame = fq.get(timeout=3)
+    except queue.Empty:
         return Response(b'', status=503)
     _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return Response(buf.tobytes(), mimetype='image/jpeg')
@@ -1006,6 +1008,7 @@ def api_cameras():
         return jsonify([{
             'id': c['id'], 'source': c['source'],
             'name': camera_names.get(str(c['id']), f'摄像头{c["id"]+1}'),
+            'enabled': camera_enabled.get(c['id'], True),
         } for c in CAMERAS])
 
     elif request.method == 'POST':
@@ -1279,31 +1282,92 @@ def api_add_face_photo(face_id):
 # ============================================================
 @app.route('/test', methods=['GET', 'POST'])
 def test_page():
+    global test_video_path
     if request.method == 'POST':
         vf = request.files.get('video')
         if not vf or vf.filename == '':
             return jsonify({'ok': False, 'error': '请选择视频文件'}), 400
         vp = os.path.join('static', 'test_video.mp4')
         vf.save(vp)
-        with video_source_lock:
-            global video_source; video_source = vp
-        if hasattr(generate_frames, '_vid_cap') and generate_frames._vid_cap:
-            generate_frames._vid_cap.release()
-            generate_frames._vid_cap = None
+        with test_video_lock:
+            test_video_path = vp
         print(f"[Test] Video uploaded: {vp}")
-        return jsonify({'ok': True, 'message': '视频已加载，刷新监控页面查看'})
+        return jsonify({'ok': True, 'message': '视频已加载，下方画面查看检测效果'})
     return render_template('test.html')
 
 
 @app.route('/test/reset')
 def test_reset():
-    with video_source_lock:
-        global video_source; video_source = 'camera'
-    if hasattr(generate_frames, '_vid_cap') and generate_frames._vid_cap:
-        generate_frames._vid_cap.release()
-        generate_frames._vid_cap = None
-    print("[Test] Reset to camera mode")
-    return jsonify({'ok': True, 'message': '已切回摄像头模式'})
+    global test_video_path
+    with test_video_lock:
+        test_video_path = None
+    print("[Test] Reset")
+    return jsonify({'ok': True, 'message': '已清除测试视频'})
+
+
+@app.route('/test_feed')
+def test_feed():
+    """MJPEG stream for uploaded test video with detection overlay."""
+    def gen():
+        global test_video_path
+        while alive.is_set():
+            vp = None
+            with test_video_lock:
+                vp = test_video_path
+            if vp is None:
+                blank = np.zeros((360, 480, 3), dtype=np.uint8)
+                cv2.putText(blank, '请上传测试视频', (80, 190),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
+                _, buf = cv2.imencode('.jpg', blank)
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+                time.sleep(0.5)
+                continue
+
+            cap = cv2.VideoCapture(vp)
+            while alive.is_set():
+                vp2 = None
+                with test_video_lock:
+                    vp2 = test_video_path
+                if vp2 != vp:
+                    break  # video changed or reset
+
+                success, frame = cap.read()
+                if not success:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+
+                # Run detection on frame
+                results = model(frame, imgsz=YOLO_IMGSZ, conf=0.5, verbose=False)
+                res = results[0]
+                dets = all_persons(res)
+
+                # Match tracks
+                tracks = _match_or_create_tracks(dets, int(cap.get(cv2.CAP_PROP_POS_FRAMES)))
+
+                for tid, t in tracks.items():
+                    kp, kp_conf = t.get('kp'), t.get('kp_conf')
+                    if kp is None or kp_conf is None:
+                        continue
+                    color = t.get('color', (0, 255, 0))
+                    for a, b in SKELETON_EDGES:
+                        if kp_conf[a] > 0.5 and kp_conf[b] > 0.5:
+                            cv2.line(frame, (int(kp[a][0]), int(kp[a][1])),
+                                     (int(kp[b][0]), int(kp[b][1])), color, 2)
+                    for i in range(len(kp)):
+                        if kp_conf[i] > 0.5:
+                            cv2.circle(frame, (int(kp[i][0]), int(kp[i][1])), 4, color, -1)
+
+                cv2.putText(frame, f'Test Mode | Persons: {len(tracks)}', (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                _, buf = cv2.imencode('.jpg', frame,
+                                      [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+
+            cap.release()
+            with test_video_lock:
+                if test_video_path == vp:
+                    test_video_path = None
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 # ============================================================

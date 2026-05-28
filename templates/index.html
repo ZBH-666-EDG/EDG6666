@@ -401,6 +401,12 @@ setInterval(loadCameras,5000);
 refreshStatus();
 loadLatestReport();
 loadCameras();
+
+// Auto-stop test mode when user navigates away from monitoring page
+window.addEventListener('beforeunload', () => {
+    navigator.sendBeacon('/test/reset');
+});
+</script>
 </script>
 </body>
 </html>
