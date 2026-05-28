@@ -60,14 +60,43 @@ os.makedirs('static/falls', exist_ok=True)
 os.makedirs('static/uploads', exist_ok=True)
 
 # ============================================================
-# Models & Camera
+# Models & Camera config
 # ============================================================
 model = YOLO('yolov8n-pose.pt')
-camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-camera.set(cv2.CAP_PROP_FPS, 60)
 
+# Camera list — add/remove cameras here. Default names loaded from cameras.json
+CAMERAS = [
+    {'id': 0, 'source': 0},
+    {'id': 1, 'source': 1},
+]
+CAMERA_NAMES_FILE = os.path.join(os.path.dirname(__file__), 'cameras.json')
+
+
+def _load_camera_names():
+    if os.path.isfile(CAMERA_NAMES_FILE):
+        try:
+            with open(CAMERA_NAMES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_camera_names(names):
+    with open(CAMERA_NAMES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(names, f, ensure_ascii=False, indent=2)
+
+
+camera_names = _load_camera_names()
+
+# Each camera gets its own pipeline
+pipelines = {}
+frame_queues = {}
+latest_detections = {}
+detection_locks = {}
+current_fps_list = {}
+person_count_list = {}
+last_p_fall_list = {}
 video_source = 'camera'
 video_source_lock = threading.Lock()
 
@@ -185,15 +214,8 @@ recognized_name = None
 state_lock = threading.Lock()
 last_face_match_frame = 0
 held_face_name = None
-last_p_fall = 0.0
-frame_queue = queue.Queue(maxsize=60)
 alive = threading.Event()
 alive.set()
-
-latest_detection = {'kp_xy': None, 'kp_conf': None, 'is_fall': False}
-detection_lock = threading.Lock()
-latest_frame = None
-frame_lock = threading.Lock()
 
 _auto_learn_history = {}
 auto_learn_lock = threading.Lock()
@@ -583,20 +605,21 @@ def trigger_fall_event(frame, info):
 # ============================================================
 # Detection Worker Thread
 # ============================================================
-def detection_worker():
-    global recognized_name, person_count, fall_counter, last_fall_time
-    global last_face_match_frame, held_face_name, last_p_fall
+def detection_worker(cam_id):
+    """Per-camera detection worker — reads from frame_queues[cam_id], updates per-camera state."""
     det_frame_count = 0
     warn_hold = 0
+    fq = frame_queues[cam_id]
+    dl = detection_locks[cam_id]
+    ld = latest_detections[cam_id]
+    global last_fall_time
 
     while alive.is_set():
         try:
-            frame = frame_queue.get(timeout=1)
+            frame = fq.get(timeout=1)
         except queue.Empty:
             continue
 
-        with frame_lock:
-            latest_frame = frame.copy()
         det_frame_count += 1
 
         # YOLO pose detection
@@ -607,112 +630,87 @@ def detection_worker():
 
             with tracker_lock:
                 tracks = _match_or_create_tracks(detections, det_frame_count)
-                with state_lock:
-                    person_count = len(tracks)
+                person_count_list[cam_id] = len(tracks)
 
-            # Per-person face recognition (round-robin one person per cycle)
+            # Per-person face recognition
             if face_app is not None and det_frame_count % FACE_RECOGNITION_INTERVAL == 0:
-                # Pick one unnamed tracked person to try face recognition on
                 for tid, t in tracks.items():
                     if t.get('name') is None:
-                        bx, by, bw2, bh2 = int(t['bbox'][0]), int(t['bbox'][1]), \
-                            int(t['bbox'][2]), int(t['bbox'][3])
-                        # Expand bbox slightly for face detection
-                        bx = max(0, bx - 20); by = max(0, by - 40)
-                        bw2 = min(frame.shape[1], bw2 + 20)
-                        bh2 = min(frame.shape[0], bh2 + 10)
+                        bx, by = max(0, int(t['bbox'][0])-20), max(0, int(t['bbox'][1])-40)
+                        bw2 = min(frame.shape[1], int(t['bbox'][2])+20)
+                        bh2 = min(frame.shape[0], int(t['bbox'][3])+10)
                         face_crop = frame[by:bh2, bx:bw2]
                         if face_crop.size > 0:
                             name, _ = recognize_face(face_crop, det_frame_count)
                             if name is not None:
                                 t['name'] = name
-                        break  # only one person per cycle
+                        break
 
-            # Sync recognized_name from the person with highest confidence
+            # Sync recognized_name from highest-confidence named track
             named_tracks = [(t.get('name'), t.get('last_p_fall', 0))
                             for t in tracks.values() if t.get('name')]
             with state_lock:
                 if named_tracks:
                     recognized_name = max(named_tracks, key=lambda x: x[1])[0]
-                else:
-                    recognized_name = None
 
-            # Process each tracked person independently
-            max_p_fall = 0.0
-            any_is_fall = False
+            # Process each tracked person
+            max_p_fall = 0.0; any_is_fall = False
             for tid, t in tracks.items():
-                kp = t['kp']; kp_conf = t['kp_conf']
-                # Override check_fall's globals with per-person histories
-                saved_hip = list(hip_history)
-                saved_angle = list(angle_history)
-                # Temporarily swap in per-person histories
+                kp, kp_conf = t['kp'], t['kp_conf']
+                # Per-person histories — swap into globals temporarily
+                sh = list(hip_history); sa = list(angle_history)
                 hip_history.clear(); hip_history.extend(t['hip_history'])
                 angle_history.clear(); angle_history.extend(t['angle_history'])
-
                 is_fall_now, info = check_fall(kp, kp_conf)
-
-                # Save back per-person histories
                 t['hip_history'] = deque(hip_history, maxlen=5)
                 t['angle_history'] = deque(angle_history, maxlen=5)
-                hip_history.clear(); hip_history.extend(saved_hip)
-                angle_history.clear(); angle_history.extend(saved_angle)
+                hip_history.clear(); hip_history.extend(sh)
+                angle_history.clear(); angle_history.extend(sa)
 
                 p_fall_val = info.get('p_fall', 0.0) if info else 0.0
-                if p_fall_val > max_p_fall:
-                    max_p_fall = p_fall_val
-
-                # Per-person fall state machine
-                if is_fall_now:
-                    t['fall_counter'] += 1
-                else:
-                    t['fall_counter'] = 0
-
+                if p_fall_val > max_p_fall: max_p_fall = p_fall_val
+                if is_fall_now: t['fall_counter'] += 1
+                else: t['fall_counter'] = 0
                 if t['fall_counter'] >= FALL_CONSECUTIVE_FRAMES:
-                    any_is_fall = True
-                    t['fall_counter'] = 0
+                    any_is_fall = True; t['fall_counter'] = 0
+                if info: t['last_p_fall'] = p_fall_val
 
-                if info:
-                    t['last_p_fall'] = p_fall_val
+            last_p_fall_list[cam_id] = max_p_fall
 
-            if max_p_fall > 0:
-                last_p_fall = max_p_fall
-
-            # Level 1 warning (any person with elevated P_FALL)
+            # Level 1 warning
             if WARN_PROB_THRESHOLD <= max_p_fall < FALL_PROB_THRESHOLD:
                 warn_hold = WARN_HOLD_FRAMES
             else:
                 warn_hold = max(0, warn_hold - 1)
             if warn_hold > 0 and not any_is_fall:
                 broadcast_alert({'type': 'warning', 'level': 1,
-                                 'message': '姿态不稳', 'p_fall': max_p_fall})
+                                 'message': '姿态不稳', 'p_fall': max_p_fall, 'cam_id': cam_id})
 
-            # Level 2: find which person fell and trigger
+            # Level 2: trigger per-person fall events
             now = time.time()
             for tid, t in tracks.items():
                 if t['fall_counter'] >= FALL_CONSECUTIVE_FRAMES:
                     if (now - last_fall_time) > FALL_COOLDOWN_SECONDS:
                         last_fall_time = now
-                        # Use person's name if recognized, else "陌生人"
                         pname = t.get('name') or '陌生人'
                         with state_lock:
-                            saved_name = recognized_name
-                            recognized_name = pname
+                            saved_name = recognized_name; recognized_name = pname
                         trigger_fall_event(frame, {'p_fall': t.get('last_p_fall', 0.75),
-                                                    'angle': 0, 'velocity': 0,
-                                                    'ar': 0, 'angle_accel': 0,
-                                                    'p_angle': 0, 'p_vel': 0, 'p_ar': 0,
-                                                    'p_accel': 0, 'p_hf': 0})
+                                                    'angle': 0, 'velocity': 0, 'ar': 0,
+                                                    'angle_accel': 0, 'p_angle': 0,
+                                                    'p_vel': 0, 'p_ar': 0,
+                                                    'p_accel': 0, 'p_hf': 0, 'cam_id': cam_id})
                         with state_lock:
                             recognized_name = saved_name
                         t['fall_counter'] = 0
 
-            # Publish latest detection for drawing (primary person = highest P_FALL)
+            # Publish detection for drawing
             best_t = max(tracks.values(), key=lambda t: t.get('last_p_fall', 0)) if tracks else None
-            with detection_lock:
-                latest_detection['kp_xy'] = best_t['kp'] if best_t else None
-                latest_detection['kp_conf'] = best_t['kp_conf'] if best_t else None
-                latest_detection['is_fall'] = any_is_fall
-                latest_detection['tracks'] = tracks
+            with dl:
+                ld['kp_xy'] = best_t['kp'] if best_t else None
+                ld['kp_conf'] = best_t['kp_conf'] if best_t else None
+                ld['is_fall'] = any_is_fall
+                ld['tracks'] = tracks
         else:
             time.sleep(0.002)
 
@@ -720,60 +718,52 @@ def detection_worker():
 # ============================================================
 # MJPEG Stream Generator (reads camera, feeds detection, draws overlays)
 # ============================================================
-def generate_frames():
-    global current_fps, fps_timer, fps_frame_count
+def open_camera(source):
+    """Open a camera with DSHOW backend."""
+    cap = cv2.VideoCapture(source, cv2.CAP_DSHOW)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 60)
+    return cap
+
+
+def generate_frames(cam_id):
+    """MJPEG stream generator for a specific camera."""
+    cam = open_camera(CAMERAS[cam_id]['source'])
+    fq = frame_queues[cam_id]
+    dl = detection_locks[cam_id]
+    ld = latest_detections[cam_id]
+    fc_start = time.time(); fc_count = 0
+
     while alive.is_set():
-        with video_source_lock:
-            src = video_source
+        success, frame = cam.read()
+        if not success:
+            time.sleep(0.1); continue
 
-        if src == 'camera':
-            success, frame = camera.read()
-            if not success:
-                time.sleep(0.1)
-                continue
-        else:
-            if not hasattr(generate_frames, '_vid_cap') or generate_frames._vid_cap is None:
-                try:
-                    generate_frames._vid_cap = cv2.VideoCapture(src)
-                except:
-                    time.sleep(0.5)
-                    continue
-            success, frame = generate_frames._vid_cap.read()
-            if not success:
-                generate_frames._vid_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-
-        fps_frame_count += 1
-        now = time.time()
-        elapsed = now - fps_timer
+        fc_count += 1
+        now = time.time(); elapsed = now - fc_start
         if elapsed >= 1.0:
-            current_fps = round(fps_frame_count / elapsed, 1)
-            fps_frame_count = 0
-            fps_timer = now
+            current_fps_list[cam_id] = round(fc_count / elapsed, 1)
+            fc_count = 0; fc_start = now
 
         # Feed detection worker
-        if frame_queue.full():
-            try:
-                frame_queue.get_nowait()
-            except queue.Empty:
-                pass
-        frame_queue.put(frame)
+        if fq.full():
+            try: fq.get_nowait()
+            except queue.Empty: pass
+        fq.put(frame)
 
         # Draw all tracked persons
-        with detection_lock:
-            tracks = latest_detection.get('tracks', {})
+        with dl:
+            tracks = ld.get('tracks', {})
 
         for tid, t in tracks.items():
-            kp = t.get('kp'); kp_conf = t.get('kp_conf')
-            if kp is None or kp_conf is None:
-                continue
-            # Per-person fall state for coloring
+            kp, kp_conf = t.get('kp'), t.get('kp_conf')
+            if kp is None or kp_conf is None: continue
             is_fall_person = t.get('fall_counter', 0) > 0
             color = t.get('color', (0, 255, 0))
             pname = t.get('name') or f'ID:{tid}'
             p_fall_val = t.get('last_p_fall', 0)
 
-            # Draw skeleton with person color
             for a, b in SKELETON_EDGES:
                 if kp_conf[a] > 0.5 and kp_conf[b] > 0.5:
                     c = (0, 0, 255) if is_fall_person else color
@@ -786,26 +776,24 @@ def generate_frames():
                     cv2.circle(frame, (cx, cy), 4, c, -1)
                     cv2.circle(frame, (cx, cy), 5, (255, 255, 255), 1)
 
-            # Name + P_FALL above head
             bx, by = int(t['bbox'][0]), int(t['bbox'][1])
             label = f'{pname} | {p_fall_val:.2f}'
-            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+            (lw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
             lx = max(0, bx + int((t['bbox'][2] - t['bbox'][0] - lw) / 2))
             ly = max(20, by - 8)
-            cv2.putText(frame, label, (lx, ly),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+            cv2.putText(frame, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
         # HUD
-        cv2.putText(frame, f"FPS: {current_fps}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Persons: {person_count}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        p_color = (0, 255, 0) if last_p_fall < WARN_PROB_THRESHOLD else (
-            (0, 0, 255) if last_p_fall >= FALL_PROB_THRESHOLD else (0, 165, 255))
-        cv2.putText(frame, f"P_FALL: {last_p_fall:.2f}", (10, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, p_color, 2)
-        cv2.putText(frame, f"Mode: {src[:20]}", (10, frame.shape[0] - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (128, 128, 128), 1)
+        fps = current_fps_list.get(cam_id, 0)
+        pers = person_count_list.get(cam_id, 0)
+        pf = last_p_fall_list.get(cam_id, 0)
+        cam_name = camera_names.get(str(cam_id), f'摄像头{cam_id+1}')
+        cv2.putText(frame, f"{cam_name} | FPS: {fps} | Persons: {pers}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        p_color = (0, 255, 0) if pf < WARN_PROB_THRESHOLD else (
+            (0, 0, 255) if pf >= FALL_PROB_THRESHOLD else (0, 165, 255))
+        cv2.putText(frame, f"P_FALL: {pf:.2f}", (10, 55),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, p_color, 1)
 
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
@@ -879,19 +867,37 @@ def history():
 # ============================================================
 @app.route('/video_feed')
 def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate_frames(0), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/video_feed/<int:cam_id>')
+def video_feed_cam(cam_id):
+    if cam_id < 0 or cam_id >= len(CAMERAS):
+        return 'Camera not found', 404
+    return Response(generate_frames(cam_id), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 @app.route('/capture_frame')
 def capture_frame():
-    with frame_lock:
-        frame = latest_frame.copy() if latest_frame is not None else None
-    if frame is None:
-        success, frame = camera.read()
-        if not success or frame is None:
-            return Response(b'', status=503)
+    """Capture from camera 0 (used by registration)."""
+    cam = open_camera(CAMERAS[0]['source'])
+    success, frame = cam.read()
+    cam.release()
+    if not success or frame is None:
+        return Response(b'', status=503)
     _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return Response(buf.tobytes(), mimetype='image/jpeg')
+
+
+@app.route('/api/camera/<int:cam_id>/rename', methods=['POST'])
+def api_rename_camera(cam_id):
+    data = request.get_json(force=True) or {}
+    new_name = (data.get('name') or '').strip()
+    if not new_name:
+        return jsonify({'ok': False, 'error': '名称不能为空'}), 400
+    camera_names[str(cam_id)] = new_name
+    _save_camera_names(camera_names)
+    return jsonify({'ok': True, 'name': new_name})
 
 
 @app.route('/events')
@@ -922,10 +928,17 @@ def on_disconnect():
 @app.route('/api/health')
 def api_health():
     return jsonify({
-        'status': 'ok', 'fps': current_fps, 'persons': person_count,
-        'name': recognized_name, 'p_fall': last_p_fall, 'mode': video_source,
+        'status': 'ok',
+        'cameras': [{
+            'id': c['id'],
+            'name': camera_names.get(str(c['id']), '摄像头' + str(c['id'] + 1)),
+            'fps': current_fps_list.get(c['id'], 0),
+            'persons': person_count_list.get(c['id'], 0),
+            'p_fall': last_p_fall_list.get(c['id'], 0),
+        } for c in CAMERAS],
+        'name': recognized_name,
         'ai_enabled': cfg.AI_ENABLED and ai_toggle,
-        'ai_toggle': ai_toggle, 'uptime': round(time.time() - fps_timer, 0),
+        'ai_toggle': ai_toggle,
     })
 
 
@@ -1163,16 +1176,30 @@ def test_reset():
 # ============================================================
 if __name__ == '__main__':
     print("=" * 55)
-    print("  跌倒监测微服务 v2.0")
+    print("  跌倒监测微服务 v2.0 — 多摄像头")
     print("  http://localhost:5001")
-    print("  WebSocket: ws://localhost:5001/ws")
-    print("  API docs: 见 README.md")
+    for c in CAMERAS:
+        name = camera_names.get(str(c['id']), f'摄像头{c["id"]+1}')
+        print(f"  /video_feed/{c['id']} → {name} (source={c['source']})")
     print("=" * 55)
 
-    det_thread = threading.Thread(target=detection_worker, daemon=True, name='detection')
-    det_thread.start()
+    # Init per-camera state
+    for c in CAMERAS:
+        cid = c['id']
+        frame_queues[cid] = queue.Queue(maxsize=60)
+        latest_detections[cid] = {'kp_xy': None, 'kp_conf': None, 'is_fall': False, 'tracks': {}}
+        detection_locks[cid] = threading.Lock()
+        current_fps_list[cid] = 0
+        person_count_list[cid] = 0
+        last_p_fall_list[cid] = 0
+
+    # Start detection threads per camera
+    for c in CAMERAS:
+        t = threading.Thread(target=detection_worker, args=(c['id'],), daemon=True,
+                             name=f'detection-{c["id"]}')
+        t.start()
     cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True, name='cleanup')
     cleanup_thread.start()
-    print("[System] Detection + Cleanup threads started")
+    print(f"[System] {len(CAMERAS)} camera(s) + Cleanup threads started")
 
     socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)

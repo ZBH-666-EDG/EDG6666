@@ -42,14 +42,25 @@ header .logo .version { font-size:11px; color:var(--muted); background:#0d1520; 
 /* ---- Main Layout ---- */
 .main-wrap { display:flex; height:calc(100vh - 86px); }
 .video-area {
-    flex:1; display:flex; flex-direction:column; align-items:center;
-    justify-content:center; padding:10px; min-width:0;
+    flex:1; display:flex; flex-wrap:wrap; gap:8px; padding:8px; min-width:0;
+    align-content:flex-start; overflow-y:auto;
 }
 .video-box {
     position:relative; border:2px solid var(--border); border-radius:10px;
-    overflow:hidden; background:#000; max-height:100%;
+    overflow:hidden; background:#000; flex:1; min-width:320px; max-height:50vh;
 }
-.video-box img { display:block; max-width:100%; max-height:calc(100vh - 140px); }
+.video-box.single { max-height:calc(100vh - 140px); }
+.video-box img { display:block; width:100%; height:100%; object-fit:contain; }
+.cam-label {
+    position:absolute; top:8px; left:12px; font-size:13px; font-weight:bold;
+    color:#fff; background:rgba(0,0,0,0.6); padding:3px 10px; border-radius:8px;
+    cursor:pointer; z-index:10; user-select:none;
+}
+.cam-label:hover { background:rgba(0,0,0,0.85); }
+.cam-label input {
+    background:transparent; border:none; border-bottom:1px solid var(--accent);
+    color:#fff; font-size:13px; font-weight:bold; width:120px; outline:none;
+}
 
 /* ---- Overlay indicators on video ---- */
 .video-overlays {
@@ -156,10 +167,8 @@ header .logo .version { font-size:11px; color:var(--muted); background:#0d1520; 
 
 <!-- Main -->
 <div class="main-wrap">
-    <div class="video-area">
-        <div class="video-box">
-            <img id="videoFeed" src="/video_feed" alt="Stream">
-        </div>
+    <div class="video-area" id="videoArea">
+        <!-- Camera feeds rendered dynamically -->
     </div>
 
     <!-- Sidebar -->
@@ -261,21 +270,61 @@ try{
 }catch(_){}
 
 // ============================================================
-// Camera toggle
+// Multi-camera rendering
 // ============================================================
-let cameraOn=true;
-function toggleCamera(){
-    cameraOn=!cameraOn;
-    const img=document.getElementById('videoFeed');
-    const btn=document.getElementById('btnCamera');
-    const badge=document.getElementById('badgeCamera');
-    if(cameraOn){
-        img.src='/video_feed'; btn.textContent='关闭摄像头'; btn.classList.remove('off');
-        badge.innerHTML='<span class="dot green"></span> 摄像头';
-    }else{
-        img.src=''; btn.textContent='打开摄像头'; btn.classList.add('off');
-        badge.innerHTML='<span class="dot red"></span> 摄像头';
-    }
+let cameras = [];
+let cameraOnMap = {};
+
+async function loadCameras() {
+    try {
+        const resp = await fetch('/api/health');
+        const d = await resp.json();
+        if (!d.cameras) return;
+        if (JSON.stringify(cameras) === JSON.stringify(d.cameras)) return; // no change
+        cameras = d.cameras;
+        renderCameras();
+    } catch (e) {}
+}
+
+function renderCameras() {
+    const area = document.getElementById('videoArea');
+    area.innerHTML = cameras.map(c => {
+        if (cameraOnMap[c.id] === undefined) cameraOnMap[c.id] = true;
+        const on = cameraOnMap[c.id];
+        const cls = cameras.length === 1 ? 'video-box single' : 'video-box';
+        return `<div class="${cls}" id="vbox-${c.id}">
+            <div class="cam-label" ondblclick="renameCam(${c.id})" title="双击重命名">
+                ${on ? escHTML(c.name) : '<span style="color:var(--red)">'+escHTML(c.name)+'（已关闭）</span>'}
+            </div>
+            <img id="vid-${c.id}" src="${on ? '/video_feed/'+c.id : ''}" alt="${c.name}">
+        </div>`;
+    }).join('');
+}
+
+function escHTML(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function renameCam(id) {
+    const newName = prompt('输入新名称：', cameras.find(c => c.id === id)?.name || '');
+    if (!newName || !newName.trim()) return;
+    try {
+        const resp = await fetch(`/api/camera/${id}/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName.trim() })
+        });
+        const d = await resp.json();
+        if (d.ok) { cameras = []; loadCameras(); }
+    } catch (e) { alert('重命名失败'); }
+}
+
+function toggleCamera() {
+    // Toggle all cameras
+    const allOn = Object.values(cameraOnMap).every(v => v);
+    cameras.forEach(c => { cameraOnMap[c.id] = !allOn; });
+    renderCameras();
+    const btn = document.getElementById('btnCamera');
+    btn.textContent = allOn ? '打开摄像头' : '关闭摄像头';
+    btn.classList.toggle('off', allOn);
 }
 
 // ============================================================
@@ -285,8 +334,18 @@ async function refreshStatus(){
     try{
         const resp=await fetch('/api/health');
         const d=await resp.json();
-        document.getElementById('badgeFPS').querySelector('.val').textContent=d.fps;
-        document.getElementById('badgeFall').querySelector('.val').textContent=(d.p_fall||0).toFixed(2);
+        // Multi-camera status
+        if (d.cameras) {
+            const c0 = d.cameras[0] || {};
+            document.getElementById('badgeFPS').querySelector('.val').textContent = c0.fps || '-';
+            document.getElementById('badgeFall').querySelector('.val').textContent = (c0.p_fall || 0).toFixed(2);
+            if (c0.p_fall >= 0.55) {
+                document.getElementById('badgeFall').querySelector('.dot').className =
+                    c0.p_fall >= 0.75 ? 'dot red' : 'dot yellow';
+            } else {
+                document.getElementById('badgeFall').querySelector('.dot').className = 'dot green';
+            }
+        }
         const faceBadge=document.getElementById('badgeFace');
         if(d.name){
             faceBadge.querySelector('.dot').className='dot green';
@@ -303,9 +362,6 @@ async function refreshStatus(){
         }else{
             aiBadge.querySelector('.dot').className='dot gray';aiBadge.querySelector('.val').textContent='关闭';
             aiBtn.textContent='AI: 关闭';aiBtn.style.borderColor='var(--muted)';aiBtn.style.color='var(--muted)';
-        }
-        if(d.p_fall>=0.55){
-            document.getElementById('badgeFall').querySelector('.dot').className=d.p_fall>=0.75?'dot red':'dot yellow';
         }
     }catch(e){}
 }
@@ -340,8 +396,10 @@ async function toggleAI(){
 
 setInterval(refreshStatus,3000);
 setInterval(loadLatestReport,10000);
+setInterval(loadCameras,5000);
 refreshStatus();
 loadLatestReport();
+loadCameras();
 </script>
 </body>
 </html>
