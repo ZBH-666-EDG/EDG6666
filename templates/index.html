@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跌倒监测系统</title>
+<style>
+:root {
+    --bg: #0a0e14; --card: #111922; --border: #1e2d3d;
+    --accent: #4fc3f7; --green: #4caf50; --yellow: #ff9800; --red: #f44336;
+    --text: #c8d8e0; --muted: #5a7a8a;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Microsoft YaHei',sans-serif; background:var(--bg); color:var(--text); overflow-x:hidden; }
+
+/* ---- Header ---- */
+header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 20px; background:var(--card); border-bottom:1px solid var(--border);
+}
+header .logo { display:flex; align-items:center; gap:10px; }
+header .logo h1 { font-size:18px; color:var(--accent); font-weight:400; }
+header .logo .version { font-size:11px; color:var(--muted); background:#0d1520; padding:2px 8px; border-radius:10px; }
+
+/* ---- Status Row ---- */
+#statusRow {
+    display:flex; gap:12px; padding:8px 20px; background:#0d131c;
+    border-bottom:1px solid var(--border); flex-wrap:wrap; align-items:center;
+}
+.status-badge {
+    display:flex; align-items:center; gap:6px;
+    font-size:12px; padding:5px 12px; border-radius:12px;
+    background:#0d1520; border:1px solid var(--border);
+}
+.status-badge .dot { width:7px; height:7px; border-radius:50%; }
+.status-badge .dot.green { background:var(--green); }
+.status-badge .dot.yellow { background:var(--yellow); }
+.status-badge .dot.red { background:var(--red); }
+.status-badge .dot.gray { background:var(--muted); }
+.status-badge .val { color:#fff; font-weight:500; }
+
+/* ---- Main Layout ---- */
+.main-wrap { display:flex; height:calc(100vh - 86px); }
+.video-area {
+    flex:1; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; padding:10px; min-width:0;
+}
+.video-box {
+    position:relative; border:2px solid var(--border); border-radius:10px;
+    overflow:hidden; background:#000; max-height:100%;
+}
+.video-box img { display:block; max-width:100%; max-height:calc(100vh - 140px); }
+
+/* ---- Overlay indicators on video ---- */
+.video-overlays {
+    pointer-events:none; position:absolute; top:0; left:0; right:0;
+    padding:10px; display:flex; justify-content:space-between; align-items:flex-start;
+}
+.vo-left { display:flex; flex-direction:column; gap:4px; }
+.vo-tag {
+    font-size:11px; padding:3px 8px; border-radius:6px; background:rgba(0,0,0,0.65);
+}
+.vo-tag.warn { color:var(--yellow); border:1px solid rgba(255,152,0,0.4); }
+.vo-tag.danger { color:var(--red); border:1px solid rgba(244,67,54,0.4); }
+.vo-right { font-size:18px; color:var(--accent); }
+
+/* ---- Nav buttons ---- */
+.nav-bar {
+    display:flex; gap:8px; padding:8px 20px; background:var(--card);
+    border-bottom:1px solid var(--border); flex-wrap:wrap;
+}
+.nav-btn {
+    padding:7px 16px; font-size:13px; border:1px solid var(--border);
+    background:transparent; color:var(--text); border-radius:8px;
+    cursor:pointer; transition:all .15s; text-decoration:none; display:inline-block;
+}
+.nav-btn:hover { border-color:var(--accent); color:var(--accent); }
+.nav-btn.primary { background:var(--accent); color:#000; border-color:var(--accent); font-weight:500; }
+.nav-btn.primary.off { background:transparent; color:var(--red); border-color:var(--red); }
+
+/* ---- Sidebar ---- */
+.sidebar {
+    width:310px; background:var(--card); border-left:1px solid var(--border);
+    padding:14px; overflow-y:auto; flex-shrink:0;
+}
+.sidebar h3 { font-size:15px; color:var(--accent); margin-bottom:10px; font-weight:400; }
+.sidebar .meta { font-size:11px; color:var(--muted); margin-bottom:6px; }
+.sidebar .report { font-size:12px; line-height:1.7; white-space:pre-wrap; color:var(--text); }
+.sidebar .empty { color:var(--muted); font-size:13px; text-align:center; margin-top:40px; }
+.sidebar .pending { color:var(--yellow); font-size:13px; }
+
+/* ---- Alert overlays ---- */
+.warn-overlay {
+    position:fixed; inset:0; z-index:9997;
+    background:rgba(180,140,0,0.35); display:none; pointer-events:none;
+    animation:warn-flash .8s infinite;
+}
+.warn-overlay.active { display:block; }
+@keyframes warn-flash { 0%,100%{opacity:.2} 50%{opacity:.8} }
+
+.fall-overlay {
+    position:fixed; inset:0; z-index:9999;
+    background:rgba(180,0,0,0.88); display:none; flex-direction:column;
+    align-items:center; justify-content:center; animation:flash .5s;
+}
+.fall-overlay.active { display:flex; }
+@keyframes flash { 0%{opacity:0} 50%{opacity:1} }
+.fall-overlay .icon { font-size:80px; margin-bottom:10px; }
+.fall-overlay .text {
+    font-size:38px; font-weight:bold; color:#fff;
+    text-shadow:0 0 20px rgba(255,0,0,0.8); margin-bottom:8px; text-align:center;
+}
+.fall-overlay .detail { font-size:16px; color:#ffcccc; margin-bottom:30px; }
+.fall-overlay .btn-dismiss {
+    padding:14px 48px; font-size:20px; background:#fff; color:#b00000;
+    border:none; border-radius:30px; cursor:pointer; font-weight:bold;
+}
+.fall-overlay .btn-dismiss:active { transform:scale(0.95); }
+
+/* ---- Responsive ---- */
+@media (max-width:900px) {
+    .main-wrap { flex-direction:column; }
+    .sidebar { width:100%; max-height:200px; }
+    header h1 { font-size:15px; }
+    .nav-btn { font-size:11px; padding:5px 10px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+    <div class="logo">
+        <h1>跌倒监测系统</h1>
+        <span class="version">v2.0</span>
+    </div>
+</header>
+
+<!-- Status Row -->
+<div id="statusRow">
+    <div class="status-badge" id="badgeCamera"><span class="dot green"></span> 摄像头</div>
+    <div class="status-badge" id="badgeFace"><span class="dot gray"></span> 人脸: <span class="val">-</span></div>
+    <div class="status-badge" id="badgeAI"><span class="dot gray"></span> AI: <span class="val">-</span></div>
+    <div class="status-badge" id="badgeFall"><span class="dot gray"></span> P_FALL: <span class="val">0.00</span></div>
+    <div class="status-badge" id="badgeFPS"><span class="dot green"></span> FPS: <span class="val">-</span></div>
+</div>
+
+<!-- Nav -->
+<div class="nav-bar">
+    <button id="btnCamera" class="nav-btn primary" onclick="toggleCamera()">关闭摄像头</button>
+    <a href="/register" class="nav-btn">人脸注册</a>
+    <a href="/manage" class="nav-btn">用户管理</a>
+    <a href="/test" class="nav-btn">模拟测试</a>
+    <a href="/history" class="nav-btn">跌倒历史</a>
+    <button id="btnAI" class="nav-btn" onclick="toggleAI()" style="border-color:var(--muted);color:var(--muted);">AI: 关闭</button>
+</div>
+
+<!-- Main -->
+<div class="main-wrap">
+    <div class="video-area">
+        <div class="video-box">
+            <img id="videoFeed" src="/video_feed" alt="Stream">
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <h3>最近跌倒报告</h3>
+        <div id="sidebarContent"></div>
+    </div>
+</div>
+
+<!-- Warning overlay -->
+<div id="warnOverlay" class="warn-overlay"></div>
+
+<!-- Fall overlay -->
+<div id="fallOverlay" class="fall-overlay">
+    <div class="icon">⚠️</div>
+    <div class="text" id="fallText">跌倒！请立即处理</div>
+    <div class="detail" id="fallDetail"></div>
+    <button class="btn-dismiss" onclick="dismissFall()">确 认</button>
+</div>
+
+<script>
+// ============================================================
+// Audio — auto-init on first click
+// ============================================================
+let audioCtx=null,audioReady=false;
+function initAudio(){if(audioReady)return;try{audioCtx=new(window.AudioContext||window.webkitAudioContext)();audioReady=true}catch(e){}}
+document.body.addEventListener('click',initAudio,{once:true});
+
+// ============================================================
+// Notification
+// ============================================================
+let notifyGranted=false;
+function requestNotification(){
+    if(!('Notification' in window))return;
+    if(Notification.permission==='granted'){notifyGranted=true;return}
+    if(Notification.permission!=='denied')Notification.requestPermission().then(p=>{if(p==='granted')notifyGranted=true});
+}
+document.body.addEventListener('click',requestNotification,{once:true});
+function showNotification(title,body){if(!notifyGranted)return;try{new Notification(title,{body})}catch(e){}}
+
+// ============================================================
+// Multi-level alerts
+// ============================================================
+let _alarmInterval=null,_speechActive=false;
+function speakLoop(){if(!_speechActive)return;const u=new SpeechSynthesisUtterance('危险警告。危险警告。危险警告。');u.lang='zh-CN';u.rate=.85;u.pitch=1.2;u.volume=1;u.onend=function(){if(_speechActive)speakLoop()};speechSynthesis.cancel();speechSynthesis.speak(u)}
+function playAlarm(){
+    if(_alarmInterval)clearInterval(_alarmInterval);
+    _alarmInterval=setInterval(function(){
+        if(audioCtx&&audioReady){const now=audioCtx.currentTime;const notes=[780,980,580,780];for(let r=0;r<3;r++){let t0=now+r*.8;notes.forEach(f=>{const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);o.type='sawtooth';o.frequency.setValueAtTime(f,t0);g.gain.setValueAtTime(.2,t0);g.gain.exponentialRampToValueAtTime(.01,t0+.12);o.start(t0);o.stop(t0+.12);t0+=.18})}}},2500);
+    if('speechSynthesis' in window){_speechActive=true;speechSynthesis.cancel();speakLoop()}
+}
+function stopAlarm(){if(_alarmInterval){clearInterval(_alarmInterval);_alarmInterval=null}_speechActive=false;if('speechSynthesis' in window)speechSynthesis.cancel()}
+
+function showFallOverlay(data){
+    const overlay=document.getElementById('fallOverlay');
+    const text=document.getElementById('fallText');
+    const detail=document.getElementById('fallDetail');
+    const name=data.name||'陌生人';
+    text.textContent=`⚠️ ${name} 跌倒！请立即处理 ⚠️`;
+    detail.textContent=`老人: ${name} | 置信度: ${(data.confidence*100).toFixed(0)}% | ${data.timestamp||''}`;
+    overlay.classList.add('active');
+    playAlarm();
+    showNotification(`${name} 跌倒警报！`,`检测到 ${name} 跌倒 (${(data.confidence*100).toFixed(0)}%)`);
+}
+function dismissFall(){
+    document.getElementById('fallOverlay').classList.remove('active');
+    stopAlarm();
+}
+
+function showWarning(data){
+    const overlay=document.getElementById('warnOverlay');
+    overlay.classList.add('active');
+    if(audioCtx&&audioReady){const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);o.type='sine';o.frequency.setValueAtTime(660,audioCtx.currentTime);g.gain.setValueAtTime(.1,audioCtx.currentTime);g.gain.exponentialRampToValueAtTime(.01,audioCtx.currentTime+.3);o.start();o.stop(audioCtx.currentTime+.3)}
+    setTimeout(()=>overlay.classList.remove('active'),2000);
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'||e.key==='Enter')dismissFall()});
+
+// ============================================================
+// SSE
+// ============================================================
+function connectSSE(){
+    const es=new EventSource('/events');
+    es.onmessage=function(e){
+        if(!e.data)return;
+        try{
+            const data=JSON.parse(e.data);
+            if(data.type==='fall'||data.level===2)showFallOverlay(data);
+            else if(data.type==='warning'||data.level===1)showWarning(data);
+        }catch(err){}
+    };
+    es.onerror=function(){es.close();setTimeout(connectSSE,3000)};
+}
+connectSSE();
+
+// WebSocket fallback
+try{
+    const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+    ws.onmessage=function(e){try{const data=JSON.parse(e.data);if(data.type==='fall'||data.level===2)showFallOverlay(data);else if(data.type==='warning'||data.level===1)showWarning(data)}catch(_){}}
+}catch(_){}
+
+// ============================================================
+// Camera toggle
+// ============================================================
+let cameraOn=true;
+function toggleCamera(){
+    cameraOn=!cameraOn;
+    const img=document.getElementById('videoFeed');
+    const btn=document.getElementById('btnCamera');
+    const badge=document.getElementById('badgeCamera');
+    if(cameraOn){
+        img.src='/video_feed'; btn.textContent='关闭摄像头'; btn.classList.remove('off');
+        badge.innerHTML='<span class="dot green"></span> 摄像头';
+    }else{
+        img.src=''; btn.textContent='打开摄像头'; btn.classList.add('off');
+        badge.innerHTML='<span class="dot red"></span> 摄像头';
+    }
+}
+
+// ============================================================
+// Status refresh (poll health API)
+// ============================================================
+async function refreshStatus(){
+    try{
+        const resp=await fetch('/api/health');
+        const d=await resp.json();
+        document.getElementById('badgeFPS').querySelector('.val').textContent=d.fps;
+        document.getElementById('badgeFall').querySelector('.val').textContent=(d.p_fall||0).toFixed(2);
+        const faceBadge=document.getElementById('badgeFace');
+        if(d.name){
+            faceBadge.querySelector('.dot').className='dot green';
+            faceBadge.querySelector('.val').textContent=d.name;
+        }else{
+            faceBadge.querySelector('.dot').className='dot yellow';
+            faceBadge.querySelector('.val').textContent='未识别';
+        }
+        const aiBadge=document.getElementById('badgeAI');
+        const aiBtn=document.getElementById('btnAI');
+        if(d.ai_toggle){
+            aiBadge.querySelector('.dot').className='dot green';aiBadge.querySelector('.val').textContent='开启';
+            aiBtn.textContent='AI: 开启';aiBtn.style.borderColor='var(--green)';aiBtn.style.color='var(--green)';
+        }else{
+            aiBadge.querySelector('.dot').className='dot gray';aiBadge.querySelector('.val').textContent='关闭';
+            aiBtn.textContent='AI: 关闭';aiBtn.style.borderColor='var(--muted)';aiBtn.style.color='var(--muted)';
+        }
+        if(d.p_fall>=0.55){
+            document.getElementById('badgeFall').querySelector('.dot').className=d.p_fall>=0.75?'dot red':'dot yellow';
+        }
+    }catch(e){}
+}
+
+// ============================================================
+// Sidebar
+// ============================================================
+async function loadLatestReport(){
+    try{
+        const resp=await fetch('/api/latest_report');
+        const data=await resp.json();
+        const el=document.getElementById('sidebarContent');
+        if(!data){el.innerHTML='<div class="empty">暂无跌倒记录</div>'}
+        else if(data.pending){el.innerHTML=`<div class="meta">${data.elder_name} | ${data.created_at}</div><div class="pending">AI 分析中，请稍候...</div>`}
+        else{el.innerHTML=`<div class="meta">${data.elder_name} | 置信度: ${(data.confidence*100).toFixed(0)}% | ${data.created_at}</div><div class="report">${escHTML(data.report)}</div>`}
+    }catch(e){}
+}
+function escHTML(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+async function toggleAI(){
+    try{
+        const resp=await fetch('/api/toggle_ai',{method:'POST'});
+        const d=await resp.json();
+        const btn=document.getElementById('btnAI');
+        if(d.ai_toggle){
+            btn.textContent='AI: 开启';btn.style.borderColor='var(--green)';btn.style.color='var(--green)';
+        }else{
+            btn.textContent='AI: 关闭';btn.style.borderColor='var(--muted)';btn.style.color='var(--muted)';
+        }
+    }catch(e){}
+}
+
+setInterval(refreshStatus,3000);
+setInterval(loadLatestReport,10000);
+refreshStatus();
+loadLatestReport();
+</script>
+</body>
+</html>

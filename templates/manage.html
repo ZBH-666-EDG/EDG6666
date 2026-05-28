@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理 - 跌倒监测系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background: #0f1923; color: #e0e0e0;
+            display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+        }
+        header {
+            width: 100%; padding: 16px 20px; background: #1a2d3d;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+            display: flex; align-items: center; justify-content: center; gap: 20px;
+        }
+        header h1 { font-size: 22px; color: #4fc3f7; font-weight: 400; }
+        .nav-link {
+            color: #4fc3f7; text-decoration: none; font-size: 14px;
+            border: 1px solid #4fc3f7; padding: 6px 15px; border-radius: 16px;
+        }
+        .nav-link:hover { background: #4fc3f7; color: #0f1923; }
+
+        .container { max-width: 800px; width: 100%; margin-top: 20px; padding: 0 16px; }
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .toolbar .count { font-size: 14px; color: #a0c4d0; }
+
+        .person-card {
+            background: #1a2d3d; border: 1px solid #2a4a5c;
+            border-radius: 10px; padding: 16px 20px; margin-bottom: 14px;
+        }
+        .person-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .person-header .name { font-size: 17px; color: #4fc3f7; font-weight: bold; }
+        .person-header .time { font-size: 12px; color: #7a9aaa; }
+        .person-header .actions { display: flex; gap: 8px; }
+
+        .btn-reupload {
+            padding: 6px 14px; font-size: 13px; background: transparent;
+            border: 1px solid #4fc3f7; color: #4fc3f7;
+            border-radius: 16px; cursor: pointer; transition: all 0.2s;
+        }
+        .btn-reupload:hover { background: #4fc3f7; color: #0f1923; }
+        .btn-delete {
+            padding: 6px 16px; font-size: 13px; background: transparent;
+            border: 1px solid #c62828; color: #ef5350;
+            border-radius: 16px; cursor: pointer; transition: all 0.2s;
+        }
+        .btn-delete:hover { background: #c62828; color: #fff; }
+
+        .photos-row { display: flex; gap: 10px; }
+        .photo-thumb {
+            width: 100px; height: 100px; object-fit: cover; border-radius: 6px;
+            border: 2px solid #2a4a5c; cursor: pointer;
+        }
+        .photo-thumb:hover { border-color: #4fc3f7; }
+        .photo-empty {
+            width: 100px; height: 100px; border-radius: 6px;
+            border: 2px dashed #2a4a5c; display: flex;
+            align-items: center; justify-content: center;
+            font-size: 12px; color: #5a7a8a;
+        }
+
+        .empty {
+            text-align: center; padding: 80px 20px; color: #5a7a8a; font-size: 16px;
+        }
+
+        .toast {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            padding: 10px 24px; border-radius: 8px; font-size: 14px;
+            z-index: 9999; display: none;
+        }
+        .toast.success { display: block; background: #1b3a2a; border: 1px solid #2e7d32; color: #81c784; }
+        .toast.error { display: block; background: #3a1b1b; border: 1px solid #c62828; color: #ef9a9a; }
+
+        /* ---- 3-step wizard modal ---- */
+        .modal-bg {
+            position: fixed; inset: 0; z-index: 9998;
+            background: rgba(0,0,0,0.80); display: none;
+            align-items: center; justify-content: center;
+        }
+        .modal-bg.active { display: flex; }
+        .modal-box {
+            width: 480px; max-height: 85vh; overflow-y: auto;
+            background: #1a2d3d; border: 1px solid #2a4a5c;
+            border-radius: 12px; padding: 24px;
+        }
+        .modal-box h3 { font-size: 18px; color: #4fc3f7; margin-bottom: 16px; font-weight: 400; text-align: center; }
+
+        .progress { display: flex; gap: 8px; margin-bottom: 16px; }
+        .progress .step {
+            flex: 1; text-align: center; padding: 6px; border-radius: 6px;
+            background: #0f1923; border: 1px solid #2a4a5c; font-size: 12px; color: #5a7a8a;
+        }
+        .progress .step.active { border-color: #4fc3f7; color: #4fc3f7; font-weight: bold; }
+        .progress .step.done { border-color: #4caf50; color: #81c784; }
+
+        .modal-instruction { text-align: center; font-size: 16px; color: #ff9800; margin-bottom: 8px; font-weight: bold; }
+        .modal-preview { width: 100%; border-radius: 8px; border: 2px solid #2a4a5c; background: #000; display: block; margin-bottom: 8px; }
+        .modal-captured-list { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; min-height: 54px; }
+        .modal-captured-list img { width: 70px; height: 70px; object-fit: cover; border-radius: 4px; border: 2px solid #4caf50; }
+        .modal-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .modal-actions button {
+            flex: 1; padding: 10px 12px; font-size: 14px; border: none;
+            border-radius: 8px; cursor: pointer; font-weight: bold; min-width: 80px;
+        }
+        .btn-capture-modal { background: #ff9800; color: #000; }
+        .btn-capture-modal:hover { background: #ffb74d; }
+        .btn-upload-modal { background: transparent; border: 1px solid #4fc3f7 !important; color: #4fc3f7; }
+        .btn-upload-modal:hover { background: #4fc3f7; color: #000; }
+        .btn-submit-modal { background: #4caf50; color: #fff; }
+        .btn-submit-modal:hover { background: #66bb6a; }
+        .btn-cancel-modal { background: transparent; border: 1px solid #555 !important; color: #888; flex: 0.5; }
+        .btn-cancel-modal:hover { background: #555; color: #fff; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>用户管理 - 跌倒监测系统</h1>
+    <a href="/" class="nav-link">← 返回监控</a>
+    <a href="/register" class="nav-link">人脸注册</a>
+</header>
+
+<div class="container">
+    <div class="toolbar">
+        <span class="count" id="countText">已登记: 0 人</span>
+    </div>
+    <div id="list"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+<input type="file" id="reuploadFile" accept="image/jpeg,image/png" multiple style="display:none;" onchange="handleReuploadFiles(event)">
+
+<!-- 3-step re-upload wizard modal -->
+<div id="reuploadModal" class="modal-bg">
+    <div class="modal-box">
+        <h3 id="reuploadTitle">更新照片</h3>
+        <div class="progress">
+            <div class="step active" id="modStep1">1. 正面</div>
+            <div class="step" id="modStep2">2. 稍左转</div>
+            <div class="step" id="modStep3">3. 稍右转</div>
+        </div>
+        <div class="modal-instruction" id="modInstruction">请正对摄像头</div>
+        <img id="modPreview" class="modal-preview" src="" alt="Live">
+        <div class="modal-captured-list" id="modCapturedList"></div>
+        <div class="modal-actions" id="modActionsCapture">
+            <button class="btn-capture-modal" onclick="modCapture()">📷 拍照</button>
+            <button class="btn-upload-modal" onclick="document.getElementById('reuploadFile').click()">上传文件</button>
+            <button class="btn-cancel-modal" onclick="closeReuploadModal()">取消</button>
+        </div>
+        <div class="modal-actions" id="modActionsSubmit" style="display:none;">
+            <button class="btn-submit-modal" onclick="modSubmit()">提交（共 <span id="modSubmitCount">0</span> 张）</button>
+            <button class="btn-cancel-modal" onclick="closeReuploadModal()">取消</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const INSTRUCTIONS = ['', '请正对摄像头', '头部稍向左转', '头部稍向右转'];
+let _modStep = 1;
+let _modBlobs = [null, null, null, null];
+let _modPid = null;
+
+async function loadFaces() {
+    const list = document.getElementById('list');
+    const count = document.getElementById('countText');
+    try {
+        const resp = await fetch('/api/faces');
+        const faces = await resp.json();
+        count.textContent = `已登记: ${faces.length} 人`;
+        if (faces.length === 0) {
+            list.innerHTML = '<div class="empty">暂无登记记录，请先 <a href="/register" style="color:#4fc3f7;">注册人脸</a></div>';
+            return;
+        }
+        list.innerHTML = faces.map(f => {
+            const photos = (f.photos || []).slice(0, 3);
+            let photosHTML = '';
+            for (let i = 0; i < 3; i++) {
+                if (photos[i]) {
+                    photosHTML += `<img class="photo-thumb" src="${photos[i]}" onclick="window.open('${photos[i]}')" title="照片${i+1}">`;
+                } else {
+                    photosHTML += '<div class="photo-empty">暂无</div>';
+                }
+            }
+            return `<div class="person-card">
+                <div class="person-header">
+                    <span class="name">${esc(f.name)}</span>
+                    <span class="time">${f.created_at || '-'} · ${f.embedding_count || 1} 个嵌入</span>
+                    <div class="actions">
+                        <button class="btn-reupload" onclick="triggerReupload(${f.id}, '${esc(f.name)}')">更换照片</button>
+                        <button class="btn-delete" onclick="deleteFace(${f.id}, '${esc(f.name)}')">删除</button>
+                    </div>
+                </div>
+                <div class="photos-row">${photosHTML}</div>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        list.innerHTML = '<div class="empty">加载失败: ' + esc(err.message) + '</div>';
+    }
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function deleteFace(id, name) {
+    if (!confirm(`确定删除 "${name}" 及其所有面部记录吗？`)) return;
+    try {
+        const resp = await fetch(`/api/faces/${id}`, { method: 'DELETE' });
+        const data = await resp.json();
+        showToast(data.message, data.ok ? 'success' : 'error');
+        if (data.ok) loadFaces();
+    } catch (err) { showToast('删除失败: ' + err.message, 'error'); }
+}
+
+function showToast(text, type) {
+    const t = document.getElementById('toast');
+    t.textContent = text; t.className = 'toast ' + type;
+    t.style.display = 'block';
+    setTimeout(() => { t.style.display = 'none'; }, 2500);
+}
+
+// ---- 3-step wizard ----
+function triggerReupload(id, name) {
+    _modPid = id; _modStep = 1; _modBlobs = [null, null, null, null];
+    document.getElementById('reuploadTitle').textContent = `更新照片 — ${name}`;
+    document.getElementById('modPreview').src = '/video_feed';
+    document.getElementById('modCapturedList').innerHTML = '';
+    document.getElementById('modSubmitCount').textContent = '0';
+    document.getElementById('modActionsCapture').style.display = 'flex';
+    document.getElementById('modActionsSubmit').style.display = 'none';
+    document.getElementById('reuploadModal').classList.add('active');
+    updateModUI();
+}
+
+function closeReuploadModal() {
+    document.getElementById('reuploadModal').classList.remove('active');
+    document.getElementById('modPreview').src = '';
+    _modPid = null; _modBlobs = [null, null, null, null]; _modStep = 1;
+}
+
+function updateModUI() {
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById('modStep' + i);
+        el.classList.remove('active', 'done');
+        if (_modBlobs[i]) el.classList.add('done');
+        else if (i === _modStep) el.classList.add('active');
+    }
+    document.getElementById('modInstruction').textContent = _modStep <= 3
+        ? INSTRUCTIONS[_modStep] + (_modBlobs[_modStep] ? ' ✓' : '') : '';
+    const list = document.getElementById('modCapturedList');
+    list.innerHTML = '';
+    for (let i = 1; i <= 3; i++) {
+        if (_modBlobs[i]) list.innerHTML += `<img src="${URL.createObjectURL(_modBlobs[i])}" title="步骤${i}">`;
+    }
+    if (_modStep > 3) {
+        document.getElementById('modActionsCapture').style.display = 'none';
+        document.getElementById('modActionsSubmit').style.display = 'flex';
+        document.getElementById('modSubmitCount').textContent = _modBlobs.filter((_, i) => i > 0 && _modBlobs[i]).length;
+    } else {
+        document.getElementById('modActionsCapture').style.display = 'flex';
+        document.getElementById('modActionsSubmit').style.display = 'none';
+    }
+}
+
+async function modCapture() {
+    try {
+        const resp = await fetch('/capture_frame');
+        if (!resp.ok) { alert('抓取失败'); return; }
+        _modBlobs[_modStep] = await resp.blob();
+        _modStep++;
+        updateModUI();
+    } catch (err) { alert('抓取失败: ' + err.message); }
+}
+
+function handleReuploadFiles(e) {
+    const files = Array.from(e.target.files);
+    files.forEach(file => {
+        if (_modStep <= 3) {
+            _modBlobs[_modStep] = file;
+            _modStep++;
+        }
+    });
+    updateModUI();
+    e.target.value = '';
+}
+
+async function modSubmit() {
+    const blobs = _modBlobs.filter((_, i) => i > 0 && _modBlobs[i]);
+    if (blobs.length === 0 || !_modPid) return;
+    const fd = new FormData();
+    blobs.forEach((b, i) => fd.append('photo', b, `step${i+1}.jpg`));
+    try {
+        const resp = await fetch(`/api/faces/${_modPid}/photo`, { method: 'PUT', body: fd });
+        const data = await resp.json();
+        showToast(data.message, data.ok ? 'success' : 'error');
+        if (data.ok) { loadFaces(); closeReuploadModal(); }
+    } catch (err) { showToast('更新失败: ' + err.message, 'error'); }
+}
+
+loadFaces();
+</script>
+</body>
+</html>

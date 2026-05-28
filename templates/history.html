@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>跌倒历史 - 监测系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background: #0f1923;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        header {
+            padding: 16px 20px;
+            background: #1a2d3d;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+        header h1 { font-size: 22px; color: #4fc3f7; font-weight: 400; }
+        .nav-link {
+            color: #4fc3f7;
+            text-decoration: none;
+            font-size: 14px;
+            border: 1px solid #4fc3f7;
+            padding: 6px 15px;
+            border-radius: 16px;
+        }
+        .nav-link:hover { background: #4fc3f7; color: #0f1923; }
+
+        .container { max-width: 900px; margin: 30px auto; padding: 0 20px; }
+        .count { font-size: 14px; color: #a0c4d0; margin-bottom: 16px; }
+
+        .event-card {
+            background: #1a2d3d;
+            border: 1px solid #2a4a5c;
+            border-radius: 10px;
+            padding: 18px 22px;
+            margin-bottom: 14px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .event-card:hover { border-color: #4fc3f7; }
+        .event-card .meta {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            font-size: 14px;
+            flex-wrap: wrap;
+        }
+        .event-card .name { font-weight: bold; color: #4fc3f7; font-size: 16px; }
+        .event-card .confidence { color: #ff9800; }
+        .event-card .time { color: #7a9aaa; }
+        .event-card .summary {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #a0c4d0;
+            line-height: 1.5;
+        }
+        .event-card .pending { color: #ff9800; font-size: 13px; }
+        .event-card .pin { font-size: 16px; cursor: pointer; opacity: 0.4; margin-left: 6px; }
+        .event-card .pin:hover { opacity: 1; }
+        .event-card .pin.active { opacity: 1; }
+
+        .empty {
+            text-align: center;
+            padding: 80px 20px;
+            color: #5a7a8a;
+            font-size: 16px;
+        }
+
+        /* ---- Detail Modal ---- */
+        .modal-bg {
+            position: fixed; inset: 0; z-index: 9998;
+            background: rgba(0,0,0,0.8); display: none;
+            align-items: center; justify-content: center;
+        }
+        .modal-bg.active { display: flex; }
+        .modal-box {
+            width: 680px; max-height: 85vh; overflow-y: auto;
+            background: #1a2d3d; border: 1px solid #2a4a5c;
+            border-radius: 12px; padding: 28px;
+        }
+        .modal-box h2 { color: #4fc3f7; font-size: 20px; font-weight: 400; margin-bottom: 16px; }
+        .modal-box img {
+            width: 100%; border-radius: 8px;
+            border: 2px solid #2a4a5c; margin-bottom: 16px;
+        }
+        .modal-box .report {
+            white-space: pre-wrap;
+            font-size: 14px;
+            line-height: 1.8;
+            color: #c8d8e0;
+            background: #0f1923;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #2a4a5c;
+        }
+        .btn-close {
+            padding: 10px 30px;
+            background: #4fc3f7;
+            color: #0f1923;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 16px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>跌倒事件历史</h1>
+    <a href="/" class="nav-link">← 返回监控</a>
+    <a href="/manage" class="nav-link">用户管理</a>
+</header>
+
+<div class="container">
+    <div class="count" id="countText">加载中...</div>
+    <div id="list"></div>
+</div>
+
+<!-- Detail Modal -->
+<div id="detailModal" class="modal-bg" onclick="closeModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <h2 id="detailTitle"></h2>
+        <img id="detailImg" src="" alt="Screenshot">
+        <div class="report" id="detailReport"></div>
+        <button class="btn-close" onclick="document.getElementById('detailModal').classList.remove('active')">关闭</button>
+    </div>
+</div>
+
+<script>
+async function loadEvents() {
+    const list = document.getElementById('list');
+    const count = document.getElementById('countText');
+    try {
+        const resp = await fetch('/api/events');
+        const events = await resp.json();
+        count.textContent = `共 ${events.length} 条记录`;
+
+        if (events.length === 0) {
+            list.innerHTML = '<div class="empty">暂无跌倒记录</div>';
+            return;
+        }
+
+        list.innerHTML = events.map(e => `
+            <div class="event-card" onclick="showDetail(${e.id})">
+                <div class="meta">
+                    <span class="name">${esc(e.elder_name)}</span>
+                    <span class="confidence">置信度: ${(e.confidence * 100).toFixed(0)}%</span>
+                    <span class="time">${e.created_at || '-'}</span>
+                    ${e.has_report ? '' : '<span class="pending">AI 分析中...</span>'}
+                    <span class="pin ${e.permanent ? 'active' : ''}" onclick="event.stopPropagation();togglePermanent(${e.id})" title="点击标记为永久保存">${e.permanent ? '📌' : '📍'}</span>
+                </div>
+                <div class="summary">${e.report_summary || '(暂无报告)'}</div>
+            </div>
+        `).join('');
+    } catch (err) {
+        list.innerHTML = '<div class="empty">加载失败: ' + esc(err.message) + '</div>';
+    }
+}
+
+async function showDetail(id) {
+    try {
+        const resp = await fetch(`/api/events/${id}`);
+        const e = await resp.json();
+        document.getElementById('detailTitle').textContent =
+            `${e.elder_name} — ${e.created_at} (${(e.confidence * 100).toFixed(0)}%)`;
+        document.getElementById('detailImg').src = e.screenshot;
+        document.getElementById('detailReport').textContent = e.report || 'AI 分析中...';
+        document.getElementById('detailModal').classList.add('active');
+    } catch (err) {
+        alert('加载失败: ' + err.message);
+    }
+}
+
+function closeModal(e) {
+    if (e.target === document.getElementById('detailModal')) {
+        document.getElementById('detailModal').classList.remove('active');
+    }
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function togglePermanent(id) {
+    try {
+        const resp = await fetch(`/api/events/${id}/permanent`, { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) loadEvents();
+    } catch (err) {}
+}
+
+loadEvents();
+</script>
+</body>
+</html>

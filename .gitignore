@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+*.bak
+faces.db
+static/falls/*
+static/uploads/*
+yolov8n-pose.pt
+*.mp4

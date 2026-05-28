@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频测试 - 跌倒监测系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background: #0f1923; color: #e0e0e0;
+            display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+        }
+        header {
+            width: 100%; padding: 16px 20px; background: #1a2d3d;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+            display: flex; align-items: center; justify-content: center; gap: 20px;
+        }
+        header h1 { font-size: 22px; color: #4fc3f7; font-weight: 400; }
+        .nav-link {
+            color: #4fc3f7; text-decoration: none; font-size: 14px;
+            border: 1px solid #4fc3f7; padding: 6px 15px; border-radius: 16px;
+        }
+        .nav-link:hover { background: #4fc3f7; color: #0f1923; }
+        .card {
+            margin-top: 40px; width: 480px; background: #1a2d3d;
+            border: 1px solid #2a4a5c; border-radius: 12px; padding: 30px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        }
+        .card h2 { font-size: 20px; color: #4fc3f7; margin-bottom: 20px; font-weight: 400; text-align: center; }
+        .form-group { margin-bottom: 18px; }
+        .form-group input[type="file"] {
+            width: 100%; padding: 12px; border: 1px dashed #2a4a5c;
+            border-radius: 8px; background: #0f1923; color: #a0c4d0; font-size: 14px; cursor: pointer;
+        }
+        .hint { font-size: 12px; color: #5a7a8a; margin-top: 6px; }
+        .btn-submit {
+            width: 100%; padding: 14px; font-size: 16px; background: #4fc3f7;
+            color: #0f1923; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;
+        }
+        .btn-submit:hover { background: #81d4fa; }
+        .btn-reset {
+            width: 100%; padding: 10px; font-size: 14px; background: transparent;
+            border: 1px solid #f44336; color: #f44336;
+            border-radius: 8px; cursor: pointer; margin-top: 10px;
+        }
+        .message {
+            margin-top: 14px; padding: 12px 16px; border-radius: 8px;
+            font-size: 14px; display: none; text-align: center;
+        }
+        .message.success { display: block; background: #1b3a2a; border: 1px solid #2e7d32; color: #81c784; }
+        .message.error { display: block; background: #3a1b1b; border: 1px solid #c62828; color: #ef9a9a; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>视频测试 - 跌倒监测系统</h1>
+    <a href="/" class="nav-link">← 返回监控</a>
+</header>
+<div class="card">
+    <h2>上传测试视频</h2>
+    <form id="uploadForm">
+        <div class="form-group">
+            <input type="file" id="videoFile" accept="video/mp4,video/avi,video/mov,video/webm" required>
+            <div class="hint">支持 MP4 / AVI / MOV / WebM，上传后自动替换摄像头画面进行跌倒检测测试</div>
+        </div>
+        <button type="submit" class="btn-submit" id="btnSubmit" onclick="return false;">上传并开始测试</button>
+    </form>
+    <button class="btn-reset" onclick="resetTest()">恢复摄像头模式</button>
+    <div id="message" class="message"></div>
+</div>
+<script>
+document.getElementById('uploadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    doUpload();
+});
+document.getElementById('btnSubmit').addEventListener('click', function(e) {
+    e.preventDefault();
+    doUpload();
+});
+
+async function doUpload() {
+    const fileInput = document.getElementById('videoFile');
+    if (!fileInput.files.length) {
+        alert('请先选择视频文件');
+        return;
+    }
+    const btn = document.getElementById('btnSubmit');
+    const msg = document.getElementById('message');
+    btn.disabled = true;
+    btn.textContent = '上传中...';
+    msg.className = 'message';
+    msg.style.display = 'none';
+
+    const fd = new FormData();
+    fd.append('video', fileInput.files[0]);
+    try {
+        const resp = await fetch('/test', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (data.ok) {
+            msg.className = 'message success';
+            msg.innerHTML = `${data.message}<br>请切到 <a href="/" style="color:#4fc3f7;">监控页面</a> 查看（刷新后视频自动播放）`;
+        } else {
+            msg.className = 'message error'; msg.textContent = data.error;
+        }
+        msg.style.display = 'block';
+    } catch (err) {
+        msg.className = 'message error'; msg.textContent = '上传失败: ' + err.message;
+        msg.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = '上传并开始测试';
+}
+
+async function resetTest() {
+    const msg = document.getElementById('message');
+    try {
+        const resp = await fetch('/test/reset');
+        const data = await resp.json();
+        msg.className = data.ok ? 'message success' : 'message error';
+        msg.textContent = data.message || data.error;
+        msg.style.display = 'block';
+    } catch (err) {
+        msg.className = 'message error'; msg.textContent = '重置失败: ' + err.message;
+        msg.style.display = 'block';
+    }
+}
+</script>
+</body>
+</html>
