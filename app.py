@@ -903,7 +903,82 @@ def cameras_page():
     return render_template('cameras.html')
 
 
-@app.route('/api/cameras', methods=['GET', 'POST', 'DELETE'])
+@app.route('/api/cameras/scan', methods=['POST'])
+def api_cameras_scan():
+    """Auto-discover ONVIF cameras on the local network."""
+    results = []
+
+    # Common Hikvision default passwords
+    DEFAULT_CREDS = [
+        ('admin', 'admin12345'),
+        ('admin', 'admin'),
+        ('admin', '12345'),
+        ('admin', 'Hik12345'),
+        ('admin', 'hikvision'),
+        ('admin', 'password'),
+    ]
+
+    try:
+        from onvif import ONVIFCamera
+
+        # WS-Discovery scan
+        from wsdiscovery import WSDiscovery
+        wsd = WSDiscovery()
+        wsd.start()
+        services = wsd.searchServices(timeout=5)
+        wsd.stop()
+
+        for svc in services:
+            xaddrs = svc.getXAddrs()
+            if not xaddrs:
+                continue
+            addr = xaddrs[0]
+            ip = addr.split('://')[1].split(':')[0] if '://' in addr else addr.split(':')[0]
+
+            # Try common credentials
+            found_cred = None
+            for user, pwd in DEFAULT_CREDS:
+                try:
+                    cam = ONVIFCamera(ip, 80, user, pwd)
+                    info = cam.devicemgmt.GetDeviceInformation()
+                    found_cred = (user, pwd)
+                    mfr = info.Manufacturer
+                    model = info.Model
+                    # Get RTSP URL
+                    profiles = cam.media.GetProfiles()
+                    rtsp = None
+                    if profiles:
+                        try:
+                            uri = cam.media.GetStreamUri({
+                                'StreamSetup': {'Stream': 'RTP-Unicast', 'Transport': {'Protocol': 'RTSP'}},
+                                'ProfileToken': profiles[0].token,
+                            })
+                            rtsp = uri.Uri.replace('//', f'//{user}:{pwd}@')
+                        except:
+                            pass
+                    results.append({
+                        'ip': ip, 'manufacturer': mfr, 'model': model,
+                        'rtsp': rtsp, 'user': user, 'password': pwd,
+                        'found_cred': True,
+                    })
+                    break
+                except Exception:
+                    continue
+
+            if not found_cred:
+                # Could discover but not login — still list it
+                results.append({
+                    'ip': ip, 'manufacturer': 'Unknown (need password)',
+                    'model': '', 'rtsp': None, 'user': 'admin',
+                    'password': '', 'found_cred': False,
+                })
+
+    except ImportError:
+        return jsonify({'ok': False, 'error': 'ONVIF library not installed (onvif-zeep)', 'results': []}), 500
+    except Exception as e:
+        return jsonify({'ok': True, 'results': results, 'note': f'Partial scan: {str(e)[:200]}'})
+
+    return jsonify({'ok': True, 'results': results, 'count': len(results)})
 def api_cameras():
     """GET: list all. POST: add. DELETE: remove (with id param)."""
     global CAMERAS

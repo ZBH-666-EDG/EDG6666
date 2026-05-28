@@ -5,69 +5,62 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>摄像头管理</title>
 <style>
-:root { --bg:#0a0e14; --card:#111922; --border:#1e2d3d; --accent:#4fc3f7; --text:#c8d8e0; --muted:#5a7a8a; }
+:root { --bg:#0a0e14; --card:#111922; --border:#1e2d3d; --accent:#4fc3f7; --green:#4caf50; --red:#f44336; --text:#c8d8e0; --muted:#5a7a8a; --yellow:#ff9800; }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Microsoft YaHei',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
-header {
-    padding:14px 20px; background:var(--card); border-bottom:1px solid var(--border);
-    display:flex; align-items:center; justify-content:center; gap:16px;
-}
+header { padding:14px 20px; background:var(--card); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:center; gap:16px; }
 header h1 { font-size:20px; color:var(--accent); font-weight:400; }
-.nav-link {
-    color:var(--accent); text-decoration:none; font-size:13px;
-    border:1px solid var(--accent); padding:5px 14px; border-radius:14px;
-}
+.nav-link { color:var(--accent); text-decoration:none; font-size:13px; border:1px solid var(--accent); padding:5px 14px; border-radius:14px; }
 .nav-link:hover { background:var(--accent); color:#000; }
-.container { max-width:700px; margin:24px auto; padding:0 16px; }
-
-.card {
-    background:var(--card); border:1px solid var(--border); border-radius:10px;
-    padding:20px; margin-bottom:14px;
-}
+.container { max-width:750px; margin:20px auto; padding:0 16px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:14px; }
 .card h2 { font-size:17px; color:var(--accent); font-weight:400; margin-bottom:14px; }
-
-.cam-row {
-    display:flex; align-items:center; justify-content:space-between;
-    padding:12px 14px; border-bottom:1px solid var(--border);
-}
+.cam-row { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid var(--border); }
 .cam-row:last-child { border-bottom:none; }
 .cam-info { flex:1; }
 .cam-info .name { font-size:15px; font-weight:500; }
 .cam-info .src { font-size:12px; color:var(--muted); margin-top:2px; }
 .cam-actions { display:flex; gap:8px; }
-
-.btn {
-    padding:6px 14px; font-size:13px; border:none; border-radius:8px;
-    cursor:pointer; font-weight:500; transition:all .15s;
-}
+.btn { padding:6px 14px; font-size:13px; border:none; border-radius:8px; cursor:pointer; font-weight:500; }
 .btn-rename { background:var(--accent); color:#000; }
-.btn-rename:hover { opacity:.85; }
-.btn-delete { background:transparent; border:1px solid #c62828 !important; color:#ef5350; }
-.btn-delete:hover { background:#c62828; color:#fff; }
+.btn-delete { background:transparent; border:1px solid var(--red) !important; color:#ef5350; }
+.btn-delete:hover { background:var(--red); color:#fff; }
 
-/* ---- Add form ---- */
+/* Scan */
+.btn-scan {
+    width:100%; padding:14px; font-size:16px; background:var(--accent);
+    color:#000; border:none; border-radius:10px; cursor:pointer; font-weight:bold; margin-bottom:12px;
+}
+.btn-scan:hover { opacity:.85; }
+.btn-scan:disabled { opacity:.5; cursor:not-allowed; }
+.scan-result {
+    padding:10px 14px; border:1px solid var(--border); border-radius:8px;
+    margin-bottom:8px; background:var(--bg);
+    display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;
+}
+.scan-result .info { flex:1; min-width:200px; }
+.scan-result .info .mfr { font-size:12px; color:var(--muted); }
+.scan-result .btn-add-scan {
+    padding:6px 14px; font-size:13px; background:var(--green); color:#fff;
+    border:none; border-radius:8px; cursor:pointer; font-weight:bold;
+}
+.scan-result .need-pwd { color:var(--yellow); font-size:12px; margin-right:8px; }
+.scan-result input { padding:4px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text); font-size:12px; width:100px; }
+
+/* Add form */
 .form-row { display:flex; gap:10px; align-items:flex-end; }
 .form-group { flex:1; }
 .form-group label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
 .form-group input, .form-group select {
-    width:100%; padding:9px 12px; border:1px solid var(--border);
+    width:100%; padding:8px 12px; border:1px solid var(--border);
     border-radius:8px; background:var(--bg); color:var(--text); font-size:14px; outline:none;
 }
 .form-group input:focus { border-color:var(--accent); }
-.btn-add {
-    padding:9px 20px; font-size:14px; background:#4caf50; color:#fff;
-    border:none; border-radius:8px; cursor:pointer; font-weight:bold; white-space:nowrap;
-}
-.btn-add:hover { opacity:.85; }
-
+.btn-add { padding:8px 20px; font-size:14px; background:var(--green); color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:bold; white-space:nowrap; }
 .hint { font-size:12px; color:var(--muted); margin-top:10px; }
-
-.toast {
-    position:fixed; top:20px; left:50%; transform:translateX(-50%);
-    padding:10px 24px; border-radius:8px; font-size:14px; z-index:9999; display:none;
-}
+.toast { position:fixed; top:20px; left:50%; transform:translateX(-50%); padding:10px 24px; border-radius:8px; font-size:14px; z-index:9999; display:none; }
 .toast.success { display:block; background:#1b3a2a; border:1px solid #2e7d32; color:#81c784; }
-.toast.error { display:block; background:#3a1b1b; border:1px solid #c62828; color:#ef9a9a; }
+.toast.error { display:block; background:#3a1b1b; border:1px solid var(--red); color:#ef9a9a; }
 </style>
 </head>
 <body>
@@ -76,6 +69,13 @@ header h1 { font-size:20px; color:var(--accent); font-weight:400; }
     <a href="/" class="nav-link">← 返回监控</a>
 </header>
 <div class="container">
+    <!-- Auto-scan -->
+    <div class="card">
+        <h2>自动发现摄像头</h2>
+        <button class="btn-scan" id="btnScan" onclick="scanCameras()">🔍 扫描局域网海康摄像头</button>
+        <div id="scanResults"></div>
+    </div>
+
     <!-- Camera list -->
     <div class="card">
         <h2>已配置摄像头</h2>
@@ -83,20 +83,13 @@ header h1 { font-size:20px; color:var(--accent); font-weight:400; }
         <div class="hint">⚠ 增删摄像头后需重启服务生效</div>
     </div>
 
-    <!-- Add new camera -->
+    <!-- Add -->
     <div class="card">
-        <h2>添加摄像头</h2>
+        <h2>手动添加</h2>
         <div class="form-row">
             <div class="form-group">
-                <label>类型</label>
-                <select id="addType" onchange="onTypeChange()">
-                    <option value="usb">USB 摄像头</option>
-                    <option value="rtsp">RTSP 网络流</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label id="addLabel">设备编号 (0, 1, 2...)</label>
-                <input type="text" id="addSource" value="2" placeholder="0">
+                <label id="addLabel">设备编号 / RTSP 地址</label>
+                <input type="text" id="addSource" placeholder="0 或 rtsp://...">
             </div>
             <button class="btn-add" onclick="addCamera()">+ 添加</button>
         </div>
@@ -105,11 +98,7 @@ header h1 { font-size:20px; color:var(--accent); font-weight:400; }
 <div id="toast" class="toast"></div>
 
 <script>
-function onTypeChange() {
-    const type = document.getElementById('addType').value;
-    document.getElementById('addLabel').textContent = type === 'usb' ? '设备编号 (0, 1, 2...)' : 'RTSP 地址';
-    document.getElementById('addSource').value = type === 'usb' ? '2' : 'rtsp://admin:password@192.168.1.64:554/Streaming/Channels/101';
-}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 async function loadList() {
     const resp = await fetch('/api/cameras');
@@ -117,35 +106,103 @@ async function loadList() {
     document.getElementById('camList').innerHTML = cams.map(c => `
         <div class="cam-row">
             <div class="cam-info">
-                <div class="name">${esc(c.name)} <span style="color:var(--muted);font-size:12px;">(ID:${c.id})</span></div>
+                <div class="name">${esc(c.name)} (ID:${c.id})</div>
                 <div class="src">来源: ${c.source}</div>
             </div>
             <div class="cam-actions">
                 <button class="btn btn-rename" onclick="renameCam(${c.id})">重命名</button>
-                ${cams.length > 1 ? `<button class="btn btn-delete" onclick="deleteCam(${c.id})">删除</button>` : ''}
+                ${cams.length>1?`<button class="btn btn-delete" onclick="deleteCam(${c.id})">删除</button>`:''}
             </div>
         </div>
     `).join('');
 }
 
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function scanCameras() {
+    const btn = document.getElementById('btnScan');
+    const results = document.getElementById('scanResults');
+    btn.disabled = true; btn.textContent = '扫描中...（最多 10 秒）';
+    results.innerHTML = '';
+    try {
+        const resp = await fetch('/api/cameras/scan', { method: 'POST' });
+        const data = await resp.json();
+        if (!data.ok && data.error) {
+            results.innerHTML = `<div class="scan-result"><div class="info"><span style="color:var(--red)">${esc(data.error)}</span></div></div>`;
+            if (data.error.includes('not installed')) results.innerHTML += '<div class="hint">服务器缺少 onvif-zeep 库，请联系管理员安装</div>';
+            return;
+        }
+        if (data.results.length === 0) {
+            results.innerHTML = '<div class="scan-result"><div class="info">未发现 ONVIF 摄像头（请确认摄像头在同一局域网内）</div></div>';
+            return;
+        }
+        let html = '';
+        data.results.forEach((r, i) => {
+            if (r.found_cred) {
+                html += `<div class="scan-result">
+                    <div class="info">
+                        <strong>${esc(r.manufacturer)} ${esc(r.model)}</strong><br>
+                        <span class="mfr">IP: ${esc(r.ip)} | 密码: ${esc(r.user)}/${esc(r.password)}</span>
+                    </div>
+                    <button class="btn-add-scan" onclick="addFromScan('${esc(r.rtsp||'')}')">+ 添加</button>
+                </div>`;
+            } else {
+                html += `<div class="scan-result">
+                    <div class="info">
+                        <strong>发现设备</strong><br>
+                        <span class="mfr">IP: ${esc(r.ip)}</span>
+                    </div>
+                    <span class="need-pwd">需密码:</span>
+                    <input type="text" id="pwd-${i}" placeholder="输入密码" value="admin12345">
+                    <button class="btn-add-scan" onclick="addManualScan('${esc(r.ip)}', document.getElementById('pwd-${i}').value)">测试+添加</button>
+                </div>`;
+            }
+        });
+        results.innerHTML = html;
+    } catch (e) {
+        results.innerHTML = `<div class="scan-result"><div class="info"><span style="color:var(--red)">扫描失败: ${esc(e.message)}</span></div></div>`;
+    } finally {
+        btn.disabled = false; btn.textContent = '🔍 扫描局域网海康摄像头';
+    }
+}
+
+async function addFromScan(rtsp) {
+    if (!rtsp) return alert('无法获取 RTSP 地址');
+    const resp = await fetch('/api/cameras', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({source: rtsp})
+    });
+    const d = await resp.json();
+    if (d.ok) { loadList(); showToast(d.message, 'success'); }
+    else showToast(d.error, 'error');
+}
+
+async function addManualScan(ip, pwd) {
+    if (!pwd) return alert('请输入密码');
+    const rtsp = `rtsp://admin:${pwd}@${ip}:554/Streaming/Channels/101`;
+    const resp = await fetch('/api/cameras', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({source: rtsp})
+    });
+    const d = await resp.json();
+    if (d.ok) { loadList(); showToast(d.message, 'success'); }
+    else showToast(d.error, 'error');
+}
 
 async function renameCam(id) {
-    const name = prompt('输入新名称：');
-    if (!name || !name.trim()) return;
+    const name = prompt('新名称：');
+    if (!name) return;
     try {
         const resp = await fetch(`/api/camera/${id}/rename`, {
             method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({name:name.trim()})
+            body: JSON.stringify({name: name.trim()})
         });
         const d = await resp.json();
-        if (d.ok) { loadList(); showToast('名称已更新', 'success'); }
+        if (d.ok) { loadList(); showToast('已更新', 'success'); }
         else showToast(d.error, 'error');
     } catch(e) { showToast('失败', 'error'); }
 }
 
 async function deleteCam(id) {
-    if (!confirm('确定删除此摄像头？删除后需重启生效。')) return;
+    if (!confirm('确定删除？需重启生效。')) return;
     try {
         const resp = await fetch(`/api/cameras?id=${id}`, { method:'DELETE' });
         const d = await resp.json();
@@ -155,14 +212,13 @@ async function deleteCam(id) {
 }
 
 async function addCamera() {
-    const type = document.getElementById('addType').value;
     let source = document.getElementById('addSource').value.trim();
     if (!source) return alert('请填写来源');
-    if (type === 'usb') source = parseInt(source);
+    if (/^\d+$/.test(source)) source = parseInt(source);
     try {
         const resp = await fetch('/api/cameras', {
             method:'POST', headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({source})
+            body: JSON.stringify({source})
         });
         const d = await resp.json();
         if (d.ok) { loadList(); showToast(d.message, 'success'); }
