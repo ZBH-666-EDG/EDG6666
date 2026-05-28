@@ -116,6 +116,11 @@ async function doUpload() {
     btn.textContent = '上传并开始测试';
 }
 
+// Auto-clear test mode when leaving this page
+window.addEventListener('beforeunload', () => {
+    navigator.sendBeacon('/test/reset');
+});
+
 async function resetTest() {
     const msg = document.getElementById('message');
     try {

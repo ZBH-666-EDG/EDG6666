@@ -224,6 +224,8 @@ function playAlarm(){
 function stopAlarm(){if(_alarmInterval){clearInterval(_alarmInterval);_alarmInterval=null}_speechActive=false;if('speechSynthesis' in window)speechSynthesis.cancel()}
 
 function showFallOverlay(data){
+    // Ignore re-trigger within 10s after dismiss
+    if (Date.now() - _dismissedAt < 10000) return;
     const overlay=document.getElementById('fallOverlay');
     const text=document.getElementById('fallText');
     const detail=document.getElementById('fallDetail');
@@ -234,9 +236,11 @@ function showFallOverlay(data){
     playAlarm();
     showNotification(`${name} 跌倒警报！`,`检测到 ${name} 跌倒 (${(data.confidence*100).toFixed(0)}%)`);
 }
+let _dismissedAt = 0;
 function dismissFall(){
     document.getElementById('fallOverlay').classList.remove('active');
     stopAlarm();
+    _dismissedAt = Date.now();
 }
 
 function showWarning(data){

@@ -98,6 +98,7 @@ last_p_fall_list = {}
 camera_enabled = {}  # id -> bool, whether camera is actively streaming
 test_video_path = None
 test_video_lock = threading.Lock()
+test_saved_cam_states = {}  # save camera states before test, restore after
 
 face_app = None
 try:
@@ -1291,8 +1292,14 @@ def test_page():
         vf.save(vp)
         with test_video_lock:
             test_video_path = vp
-        print(f"[Test] Video uploaded: {vp}")
-        return jsonify({'ok': True, 'message': '视频已加载，下方画面查看检测效果'})
+            # Save and disable all cameras
+            test_saved_cam_states.clear()
+            for c in CAMERAS:
+                cid = c['id']
+                test_saved_cam_states[cid] = camera_enabled.get(cid, True)
+                camera_enabled[cid] = False
+        print(f"[Test] Video uploaded, cameras disabled")
+        return jsonify({'ok': True, 'message': '视频已加载，摄像头已关闭'})
     return render_template('test.html')
 
 
@@ -1301,8 +1308,12 @@ def test_reset():
     global test_video_path
     with test_video_lock:
         test_video_path = None
-    print("[Test] Reset")
-    return jsonify({'ok': True, 'message': '已清除测试视频'})
+        # Restore saved camera states
+        for cid, state in test_saved_cam_states.items():
+            camera_enabled[cid] = state
+        test_saved_cam_states.clear()
+    print("[Test] Reset, cameras restored")
+    return jsonify({'ok': True, 'message': '测试结束，摄像头已恢复'})
 
 
 @app.route('/test_feed')
@@ -1344,11 +1355,31 @@ def test_feed():
                 # Match tracks
                 tracks = _match_or_create_tracks(dets, int(cap.get(cv2.CAP_PROP_POS_FRAMES)))
 
+                max_p_fall = 0.0; any_fall = False
                 for tid, t in tracks.items():
                     kp, kp_conf = t.get('kp'), t.get('kp_conf')
                     if kp is None or kp_conf is None:
                         continue
-                    color = t.get('color', (0, 255, 0))
+                    # Per-person fall check
+                    sh = list(hip_history); sa = list(angle_history)
+                    hip_history.clear(); hip_history.extend(t['hip_history'])
+                    angle_history.clear(); angle_history.extend(t['angle_history'])
+                    is_fall, info = check_fall(kp, kp_conf)
+                    t['hip_history'] = deque(hip_history, maxlen=5)
+                    t['angle_history'] = deque(angle_history, maxlen=5)
+                    hip_history.clear(); hip_history.extend(sh)
+                    angle_history.clear(); angle_history.extend(sa)
+                    pf = info.get('p_fall', 0) if info else 0
+                    if pf > max_p_fall: max_p_fall = pf
+                    if is_fall:
+                        t['fall_counter'] += 1
+                    else:
+                        t['fall_counter'] = 0
+                    if t['fall_counter'] >= FALL_CONSECUTIVE_FRAMES:
+                        any_fall = True
+                        t['fall_counter'] = 0
+
+                    color = (0, 0, 255) if t['fall_counter'] > 0 else t.get('color', (0, 255, 0))
                     for a, b in SKELETON_EDGES:
                         if kp_conf[a] > 0.5 and kp_conf[b] > 0.5:
                             cv2.line(frame, (int(kp[a][0]), int(kp[a][1])),
@@ -1357,8 +1388,13 @@ def test_feed():
                         if kp_conf[i] > 0.5:
                             cv2.circle(frame, (int(kp[i][0]), int(kp[i][1])), 4, color, -1)
 
-                cv2.putText(frame, f'Test Mode | Persons: {len(tracks)}', (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # HUD
+                cv2.putText(frame, f'Test Mode | Persons: {len(tracks)} | P_FALL: {max_p_fall:.2f}',
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (0, 0, 255) if max_p_fall >= FALL_PROB_THRESHOLD else (0, 255, 0), 2)
+                if any_fall:
+                    cv2.putText(frame, 'FALL DETECTED!', (10, 60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
                 _, buf = cv2.imencode('.jpg', frame,
                                       [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
@@ -1367,6 +1403,9 @@ def test_feed():
             with test_video_lock:
                 if test_video_path == vp:
                     test_video_path = None
+                    for cid, state in test_saved_cam_states.items():
+                        camera_enabled[cid] = state
+                    test_saved_cam_states.clear()
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
