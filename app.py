@@ -306,16 +306,86 @@ def recognize_face(frame_bgr, frame_no=0):
 # ============================================================
 # YOLO helpers
 # ============================================================
-def primary_person(result):
+# ============================================================
+# Multi-person tracker (simple IoU-based)
+# ============================================================
+TRACK_MAX_LOST = 30    # frames before removing a lost track
+IOU_MATCH_MIN = 0.3    # minimum IoU to consider a match
+next_track_id = 0
+tracked_persons = {}   # id -> {bbox,last_seen,kp,kp_conf,hip_hist,angle_hist,fall_cnt,name,color}
+tracker_lock = threading.Lock()
+
+PERSON_COLORS = [
+    (0, 255, 0), (255, 128, 0), (0, 200, 255), (255, 0, 255),
+    (255, 255, 0), (0, 255, 200), (200, 100, 255), (255, 200, 0),
+]
+
+
+def _iou(boxA, boxB):
+    """Intersection-over-Union of two xyxy boxes."""
+    xA = max(boxA[0], boxB[0]); yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2]); yB = min(boxA[3], boxB[3])
+    inter = max(0, xB - xA) * max(0, yB - yA)
+    areaA = max(1, (boxA[2] - boxA[0]) * (boxA[3] - boxA[1]))
+    areaB = max(1, (boxB[2] - boxB[0]) * (boxB[3] - boxB[1]))
+    return inter / float(areaA + areaB - inter)
+
+
+def _match_or_create_tracks(detections, frame_no):
+    """
+    detections: list of (bbox_xyxy, kp_xy, kp_conf)
+    Matches detections to existing tracks via IoU, creates new tracks as needed.
+    """
+    global next_track_id
+    matched_tids = set()
+    new_tracks = {}
+
+    for det_bbox, kp, kp_conf in detections:
+        best_tid, best_iou = None, 0
+        for tid, t in tracked_persons.items():
+            if tid in matched_tids:
+                continue
+            iou = _iou(det_bbox, t['bbox'])
+            if iou > best_iou:
+                best_iou = iou; best_tid = tid
+        if best_tid is not None and best_iou >= IOU_MATCH_MIN:
+            tid = best_tid; matched_tids.add(tid)
+            t = tracked_persons[tid]
+            t['bbox'] = det_bbox; t['last_seen'] = frame_no
+            t['kp'] = kp; t['kp_conf'] = kp_conf
+            new_tracks[tid] = t
+        else:
+            tid = next_track_id; next_track_id += 1
+            color = PERSON_COLORS[tid % len(PERSON_COLORS)]
+            new_tracks[tid] = {
+                'bbox': det_bbox, 'last_seen': frame_no,
+                'kp': kp, 'kp_conf': kp_conf,
+                'hip_history': deque(maxlen=5), 'angle_history': deque(maxlen=5),
+                'fall_counter': 0, 'name': None, 'color': color,
+            }
+
+    # Remove stale tracks
+    stale = [tid for tid in tracked_persons if frame_no - tracked_persons[tid]['last_seen'] > TRACK_MAX_LOST]
+    for tid in stale:
+        del tracked_persons[tid]
+
+    tracked_persons.clear()
+    tracked_persons.update(new_tracks)
+    return new_tracks
+
+
+def all_persons(result):
+    """Extract all detected persons from YOLO result. Returns list of (bbox, kp_xy, kp_conf)."""
     if result.keypoints is None or len(result.keypoints) == 0:
-        return None, None
+        return []
+    kps = result.keypoints.xy.cpu().numpy()
+    confs = result.keypoints.conf.cpu().numpy()
     if result.boxes is not None and len(result.boxes) > 0:
-        areas = [(float(b[2] - b[0]) * float(b[3] - b[1])) for b in result.boxes.xyxy]
-        idx = int(np.argmax(areas))
+        boxes = result.boxes.xyxy.cpu().numpy()
     else:
-        idx = 0
-    return (result.keypoints.xy[idx].cpu().numpy(),
-            result.keypoints.conf[idx].cpu().numpy())
+        # Fallback: use keypoint min/max as approximate box
+        boxes = np.array([[k[:, 0].min(), k[:, 1].min(), k[:, 0].max(), k[:, 1].max()] for k in kps])
+    return [(tuple(boxes[i]), kps[i], confs[i]) for i in range(len(kps))]
 
 
 def draw_skeleton(frame, kp_xy, kp_conf, is_fall=False):
@@ -544,48 +614,89 @@ def detection_worker():
         if det_frame_count % DETECTION_INTERVAL == 0:
             results = model(frame, imgsz=YOLO_IMGSZ, conf=0.5, verbose=False)
             result = results[0]
-            kp_xy, kp_conf = primary_person(result)
+            detections = all_persons(result)
 
-            with state_lock:
-                person_count = 1 if kp_xy is not None else 0
+            with tracker_lock:
+                tracks = _match_or_create_tracks(detections, det_frame_count)
+                with state_lock:
+                    person_count = len(tracks)
 
-            is_fall_now = False; info = None
-            if kp_xy is not None and kp_conf is not None:
-                is_fall_now, info = check_fall(kp_xy, kp_conf)
+            # Process each tracked person independently
+            max_p_fall = 0.0
+            any_is_fall = False
+            for tid, t in tracks.items():
+                kp = t['kp']; kp_conf = t['kp_conf']
+                # Override check_fall's globals with per-person histories
+                saved_hip = list(hip_history)
+                saved_angle = list(angle_history)
+                # Temporarily swap in per-person histories
+                hip_history.clear(); hip_history.extend(t['hip_history'])
+                angle_history.clear(); angle_history.extend(t['angle_history'])
+
+                is_fall_now, info = check_fall(kp, kp_conf)
+
+                # Save back per-person histories
+                t['hip_history'] = deque(hip_history, maxlen=5)
+                t['angle_history'] = deque(angle_history, maxlen=5)
+                hip_history.clear(); hip_history.extend(saved_hip)
+                angle_history.clear(); angle_history.extend(saved_angle)
+
+                p_fall_val = info.get('p_fall', 0.0) if info else 0.0
+                if p_fall_val > max_p_fall:
+                    max_p_fall = p_fall_val
+
+                # Per-person fall state machine
+                if is_fall_now:
+                    t['fall_counter'] += 1
+                else:
+                    t['fall_counter'] = 0
+
+                if t['fall_counter'] >= FALL_CONSECUTIVE_FRAMES:
+                    any_is_fall = True
+                    t['fall_counter'] = 0
+
                 if info:
-                    last_p_fall = info.get('p_fall', 0.0)
+                    t['last_p_fall'] = p_fall_val
 
-            # ---- Multi-level Alert Logic ----
-            p_fall_val = info.get('p_fall', 0.0) if info else 0.0
+            if max_p_fall > 0:
+                last_p_fall = max_p_fall
 
-            # Level 1: unstable posture warning
-            if WARN_PROB_THRESHOLD <= p_fall_val < FALL_PROB_THRESHOLD:
+            # Level 1 warning (any person with elevated P_FALL)
+            if WARN_PROB_THRESHOLD <= max_p_fall < FALL_PROB_THRESHOLD:
                 warn_hold = WARN_HOLD_FRAMES
             else:
                 warn_hold = max(0, warn_hold - 1)
-
-            if warn_hold > 0 and not is_fall_now:
+            if warn_hold > 0 and not any_is_fall:
                 broadcast_alert({'type': 'warning', 'level': 1,
-                                 'message': '姿态不稳', 'p_fall': p_fall_val})
+                                 'message': '姿态不稳', 'p_fall': max_p_fall})
 
-            # Level 2: fall confirmation
-            if is_fall_now:
-                fall_counter += 1
-            else:
-                fall_counter = 0
-
+            # Level 2: find which person fell and trigger
             now = time.time()
-            if fall_counter >= FALL_CONSECUTIVE_FRAMES:
-                if (now - last_fall_time) > FALL_COOLDOWN_SECONDS:
-                    last_fall_time = now
-                    trigger_fall_event(frame, info)
-                fall_counter = 0
+            for tid, t in tracks.items():
+                if t['fall_counter'] >= FALL_CONSECUTIVE_FRAMES:
+                    if (now - last_fall_time) > FALL_COOLDOWN_SECONDS:
+                        last_fall_time = now
+                        # Use person's name if recognized, else "陌生人"
+                        pname = t.get('name') or '陌生人'
+                        with state_lock:
+                            saved_name = recognized_name
+                            recognized_name = pname
+                        trigger_fall_event(frame, {'p_fall': t.get('last_p_fall', 0.75),
+                                                    'angle': 0, 'velocity': 0,
+                                                    'ar': 0, 'angle_accel': 0,
+                                                    'p_angle': 0, 'p_vel': 0, 'p_ar': 0,
+                                                    'p_accel': 0, 'p_hf': 0})
+                        with state_lock:
+                            recognized_name = saved_name
+                        t['fall_counter'] = 0
 
-            # Publish detection result
+            # Publish latest detection for drawing (primary person = highest P_FALL)
+            best_t = max(tracks.values(), key=lambda t: t.get('last_p_fall', 0)) if tracks else None
             with detection_lock:
-                latest_detection['kp_xy'] = kp_xy
-                latest_detection['kp_conf'] = kp_conf
-                latest_detection['is_fall'] = (fall_counter > 0)
+                latest_detection['kp_xy'] = best_t['kp'] if best_t else None
+                latest_detection['kp_conf'] = best_t['kp_conf'] if best_t else None
+                latest_detection['is_fall'] = any_is_fall
+                latest_detection['tracks'] = tracks
         else:
             time.sleep(0.002)
 
