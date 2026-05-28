@@ -64,30 +64,28 @@ os.makedirs('static/uploads', exist_ok=True)
 # ============================================================
 model = YOLO('yolov8n-pose.pt')
 
-# Camera list — add/remove cameras here. Default names loaded from cameras.json
-CAMERAS = [
-    {'id': 0, 'source': 0},
-    {'id': 1, 'source': 1},
-]
-CAMERA_NAMES_FILE = os.path.join(os.path.dirname(__file__), 'cameras.json')
+# Camera config — persisted to cameras.json, editable via /cameras page
+CAMERA_CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'cameras.json')
 
 
-def _load_camera_names():
-    if os.path.isfile(CAMERA_NAMES_FILE):
+def _load_camera_config():
+    """Load camera list + names from JSON. Returns (cameras, names)."""
+    if os.path.isfile(CAMERA_CONFIG_FILE):
         try:
-            with open(CAMERA_NAMES_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            with open(CAMERA_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('cameras', [{'id': 0, 'source': 0}]), data.get('names', {})
         except Exception:
             pass
-    return {}
+    return [{'id': 0, 'source': 0}], {}
 
 
-def _save_camera_names(names):
-    with open(CAMERA_NAMES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(names, f, ensure_ascii=False, indent=2)
+def _save_camera_config(cameras, names):
+    with open(CAMERA_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'cameras': cameras, 'names': names}, f, ensure_ascii=False, indent=2)
 
 
-camera_names = _load_camera_names()
+CAMERAS, camera_names = _load_camera_config()
 
 # Each camera gets its own pipeline
 pipelines = {}
@@ -896,8 +894,50 @@ def api_rename_camera(cam_id):
     if not new_name:
         return jsonify({'ok': False, 'error': '名称不能为空'}), 400
     camera_names[str(cam_id)] = new_name
-    _save_camera_names(camera_names)
+    _save_camera_config(CAMERAS, camera_names)
     return jsonify({'ok': True, 'name': new_name})
+
+
+@app.route('/cameras')
+def cameras_page():
+    return render_template('cameras.html')
+
+
+@app.route('/api/cameras', methods=['GET', 'POST', 'DELETE'])
+def api_cameras():
+    """GET: list all. POST: add. DELETE: remove (with id param)."""
+    global CAMERAS
+    if request.method == 'GET':
+        return jsonify([{
+            'id': c['id'], 'source': c['source'],
+            'name': camera_names.get(str(c['id']), f'摄像头{c["id"]+1}'),
+        } for c in CAMERAS])
+
+    elif request.method == 'POST':
+        data = request.get_json(force=True) or {}
+        source = data.get('source')
+        if source is None:
+            return jsonify({'ok': False, 'error': 'source is required (int for USB, str for RTSP)'}), 400
+        # Find next available id
+        used_ids = {c['id'] for c in CAMERAS}
+        new_id = 0
+        while new_id in used_ids:
+            new_id += 1
+        CAMERAS.append({'id': new_id, 'source': source})
+        _save_camera_config(CAMERAS, camera_names)
+        return jsonify({'ok': True, 'message': f'摄像头 {new_id} 已添加，重启后生效', 'id': new_id})
+
+    elif request.method == 'DELETE':
+        cam_id = request.args.get('id', type=int)
+        if cam_id is None:
+            return jsonify({'ok': False, 'error': '?id= required'}), 400
+        idx = next((i for i, c in enumerate(CAMERAS) if c['id'] == cam_id), None)
+        if idx is None:
+            return jsonify({'ok': False, 'error': '摄像头不存在'}), 404
+        CAMERAS.pop(idx)
+        camera_names.pop(str(cam_id), None)
+        _save_camera_config(CAMERAS, camera_names)
+        return jsonify({'ok': True, 'message': f'摄像头 {cam_id} 已删除，重启后生效'})
 
 
 @app.route('/events')

@@ -7,3 +7,4 @@ static/falls/*
 static/uploads/*
 yolov8n-pose.pt
 *.mp4
+cameras.json
