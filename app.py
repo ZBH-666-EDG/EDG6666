@@ -95,6 +95,7 @@ detection_locks = {}
 current_fps_list = {}
 person_count_list = {}
 last_p_fall_list = {}
+camera_enabled = {}  # id -> bool, whether camera is actively streaming
 video_source = 'camera'
 video_source_lock = threading.Lock()
 
@@ -734,6 +735,16 @@ def generate_frames(cam_id):
     fc_start = time.time(); fc_count = 0
 
     while alive.is_set():
+        # Check if camera is disabled
+        if not camera_enabled.get(cam_id, True):
+            blank = np.zeros((360, 480, 3), dtype=np.uint8)
+            cv2.putText(blank, f'{camera_names.get(str(cam_id), "Camera")} 已关闭', (40, 190),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
+            _, buf = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, 30])
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.5)
+            continue
+
         success, frame = cam.read()
         if not success:
             time.sleep(0.1); continue
@@ -887,6 +898,12 @@ def capture_frame():
     return Response(buf.tobytes(), mimetype='image/jpeg')
 
 
+@app.route('/api/camera/<int:cam_id>/toggle', methods=['POST'])
+def api_toggle_camera(cam_id):
+    camera_enabled[cam_id] = not camera_enabled.get(cam_id, True)
+    return jsonify({'ok': True, 'enabled': camera_enabled[cam_id]})
+
+
 @app.route('/api/camera/<int:cam_id>/rename', methods=['POST'])
 def api_rename_camera(cam_id):
     data = request.get_json(force=True) or {}
@@ -979,6 +996,9 @@ def api_cameras_scan():
         return jsonify({'ok': True, 'results': results, 'note': f'Partial scan: {str(e)[:200]}'})
 
     return jsonify({'ok': True, 'results': results, 'count': len(results)})
+
+
+@app.route('/api/cameras', methods=['GET', 'POST', 'DELETE'])
 def api_cameras():
     """GET: list all. POST: add. DELETE: remove (with id param)."""
     global CAMERAS
