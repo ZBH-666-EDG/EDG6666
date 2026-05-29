@@ -42,14 +42,13 @@ header .logo .version { font-size:11px; color:var(--muted); background:#0d1520; 
 /* ---- Main Layout ---- */
 .main-wrap { display:flex; height:calc(100vh - 86px); }
 .video-area {
-    flex:1; display:flex; flex-wrap:wrap; gap:8px; padding:8px; min-width:0;
-    align-content:flex-start; overflow-y:auto;
+    flex:1; display:grid; gap:8px; padding:8px; min-width:0;
+    overflow-y:auto;
 }
 .video-box {
     position:relative; border:2px solid var(--border); border-radius:10px;
-    overflow:hidden; background:#000; flex:1; min-width:320px; max-height:50vh;
+    overflow:hidden; background:#000; min-height:0;
 }
-.video-box.single { max-height:calc(100vh - 140px); }
 .video-box img { display:block; width:100%; height:100%; object-fit:contain; }
 .cam-label {
     position:absolute; top:8px; left:12px; font-size:13px; font-weight:bold;
@@ -61,6 +60,16 @@ header .logo .version { font-size:11px; color:var(--muted); background:#0d1520; 
     background:transparent; border:none; border-bottom:1px solid var(--accent);
     color:#fff; font-size:13px; font-weight:bold; width:120px; outline:none;
 }
+.btn-fullscreen {
+    position:absolute; top:8px; right:12px; z-index:10;
+    background:rgba(0,0,0,0.5); color:#fff; border:none;
+    font-size:18px; padding:4px 8px; border-radius:6px; cursor:pointer;
+}
+.btn-fullscreen:hover { background:rgba(0,0,0,0.8); }
+.video-box.fullscreen {
+    position:fixed; inset:0; z-index:9990; max-height:none; border-radius:0; border:none;
+}
+.video-box.fullscreen .btn-fullscreen { font-size:22px; padding:6px 12px; }
 
 /* ---- Overlay indicators on video ---- */
 .video-overlays {
@@ -293,20 +302,35 @@ async function loadCameras() {
 
 function renderCameras() {
     const area = document.getElementById('videoArea');
+    // Auto grid: 1 cam = 1col, 2 = 2col, 3-4 = 2col, 5+ = 3col
+    const cols = cameras.length <= 1 ? 1 : cameras.length <= 4 ? 2 : 3;
+    area.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     area.innerHTML = cameras.map(c => {
         if (cameraOnMap[c.id] === undefined) cameraOnMap[c.id] = true;
         const on = cameraOnMap[c.id];
-        const cls = cameras.length === 1 ? 'video-box single' : 'video-box';
-        return `<div class="${cls}" id="vbox-${c.id}">
+        return `<div class="video-box" id="vbox-${c.id}">
             <div class="cam-label" ondblclick="renameCam(${c.id})" title="双击重命名">
                 ${on ? escHTML(c.name) : '<span style="color:var(--red)">'+escHTML(c.name)+'（已关闭）</span>'}
             </div>
+            <button class="btn-fullscreen" onclick="toggleFullscreen('vbox-${c.id}')" title="全屏">⛶</button>
             <img id="vid-${c.id}" src="${on ? '/video_feed/'+c.id : ''}" alt="${c.name}">
         </div>`;
     }).join('');
 }
 
 function escHTML(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function toggleFullscreen(boxId) {
+    const el = document.getElementById(boxId);
+    el.classList.toggle('fullscreen');
+}
+
+// Esc to exit fullscreen
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        document.querySelectorAll('.video-box.fullscreen').forEach(el => el.classList.remove('fullscreen'));
+    }
+});
 
 async function renameCam(id) {
     const newName = prompt('输入新名称：', cameras.find(c => c.id === id)?.name || '');

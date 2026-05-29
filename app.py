@@ -730,13 +730,13 @@ def open_camera(source):
 def generate_frames(cam_id):
     """MJPEG stream generator for a specific camera."""
     fq = frame_queues[cam_id]
-    cam = open_camera(CAMERAS[cam_id]['source'])
     dl = detection_locks[cam_id]
     ld = latest_detections[cam_id]
     fc_start = time.time(); fc_count = 0
+    cam = None
 
     while alive.is_set():
-        # Check if camera is disabled
+        # Disabled camera — show placeholder
         if not camera_enabled.get(cam_id, True):
             blank = np.zeros((360, 480, 3), dtype=np.uint8)
             cv2.putText(blank, f'{camera_names.get(str(cam_id), "Camera")} 已关闭', (40, 190),
@@ -745,6 +745,9 @@ def generate_frames(cam_id):
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
             time.sleep(0.5)
             continue
+
+        if cam is None:
+            cam = open_camera(CAMERAS[cam_id]['source'])
 
         success, frame = cam.read()
         if not success:
@@ -1107,6 +1110,32 @@ def api_events():
     } for r in rows])
 
 
+@app.route('/api/events/<int:event_id>', methods=['DELETE'])
+def api_delete_event(event_id):
+    conn = get_db()
+    row = conn.execute('SELECT id, screenshot FROM events WHERE id = ?', (event_id,)).fetchone()
+    if row is None: conn.close(); return jsonify({'ok': False, 'error': '事件不存在'}), 404
+    if row['screenshot']:
+        fp = os.path.join(os.path.dirname(__file__), row['screenshot'].lstrip('/'))
+        if os.path.isfile(fp): os.remove(fp)
+    conn.execute('DELETE FROM events WHERE id = ?', (event_id,))
+    conn.commit(); conn.close()
+    return jsonify({'ok': True, 'message': f'事件 #{event_id} 已删除'})
+
+
+@app.route('/api/events/delete_all', methods=['POST'])
+def api_delete_all_events():
+    conn = get_db()
+    rows = conn.execute('SELECT screenshot FROM events').fetchall()
+    for r in rows:
+        if r['screenshot']:
+            fp = os.path.join(os.path.dirname(__file__), r['screenshot'].lstrip('/'))
+            if os.path.isfile(fp): os.remove(fp)
+    conn.execute('DELETE FROM events')
+    conn.commit(); conn.close()
+    return jsonify({'ok': True, 'message': '所有跌倒事件已清空'})
+
+
 @app.route('/api/events/<int:event_id>/permanent', methods=['POST'])
 def api_toggle_permanent(event_id):
     conn = get_db()
@@ -1395,6 +1424,21 @@ def test_feed():
                 if any_fall:
                     cv2.putText(frame, 'FALL DETECTED!', (10, 60),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
+                    # Test mode: save to DB + trigger AI if enabled
+                    now = time.time()
+                    if not hasattr(gen, '_last_fall') or (now - gen._last_fall) > FALL_COOLDOWN_SECONDS:
+                        gen._last_fall = now
+                        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        fn = os.path.join('static', 'falls', f'test_fall_{ts}.jpg')
+                        cv2.imwrite(fn, frame)
+                        conn = get_db()
+                        cur = conn.execute('INSERT INTO events (elder_name, confidence, screenshot) VALUES (?, ?, ?)',
+                                           ('测试跌倒', max_p_fall, f'/static/falls/test_fall_{ts}.jpg'))
+                        eid = cur.lastrowid
+                        conn.commit(); conn.close()
+                        if cfg.AI_ENABLED and ai_toggle:
+                            ai_executor.submit(analyze_fall_image, f'/static/falls/test_fall_{ts}.jpg', eid)
+                            print(f'[Test] Fall saved + AI queued event #{eid}')
                 _, buf = cv2.imencode('.jpg', frame,
                                       [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')

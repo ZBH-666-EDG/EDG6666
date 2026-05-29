@@ -50,6 +50,7 @@
         }
         .message.success { display: block; background: #1b3a2a; border: 1px solid #2e7d32; color: #81c784; }
         .message.error { display: block; background: #3a1b1b; border: 1px solid #c62828; color: #ef9a9a; }
+        .test-fullscreen { position:fixed; inset:0; z-index:9990; border-radius:0 !important; border:none !important; margin:0 !important; }
     </style>
 </head>
 <body>
@@ -69,7 +70,8 @@
     <button class="btn-reset" onclick="resetTest()">清除测试视频</button>
     <div id="message" class="message"></div>
 
-    <div style="margin-top:20px; border:2px solid #2a4a5c; border-radius:8px; overflow:hidden; background:#000;">
+    <div id="testVideoBox" style="margin-top:20px; border:2px solid #2a4a5c; border-radius:8px; overflow:hidden; background:#000; position:relative;">
+        <button style="position:absolute;top:8px;right:12px;z-index:10;background:rgba(0,0,0,0.5);color:#fff;border:none;font-size:18px;padding:4px 8px;border-radius:6px;cursor:pointer;" onclick="toggleTestFS()" title="全屏">⛶</button>
         <img id="testPreview" src="/test_feed" style="display:block; width:100%;">
     </div>
 </div>
@@ -115,6 +117,13 @@ async function doUpload() {
     btn.disabled = false;
     btn.textContent = '上传并开始测试';
 }
+
+function toggleTestFS() {
+    document.getElementById('testVideoBox').classList.toggle('test-fullscreen');
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') document.getElementById('testVideoBox').classList.remove('test-fullscreen');
+});
 
 // Auto-clear test mode when leaving this page
 window.addEventListener('beforeunload', () => {

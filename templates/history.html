@@ -122,7 +122,10 @@
 </header>
 
 <div class="container">
-    <div class="count" id="countText">加载中...</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div class="count" id="countText" style="margin:0;">加载中...</div>
+        <button style="padding:7px 16px;font-size:13px;background:transparent;border:1px solid #c62828;color:#ef5350;border-radius:16px;cursor:pointer;" onclick="deleteAll()">清空全部</button>
+    </div>
     <div id="list"></div>
 </div>
 
@@ -158,6 +161,7 @@ async function loadEvents() {
                     <span class="time">${e.created_at || '-'}</span>
                     ${e.has_report ? '' : '<span class="pending">AI 分析中...</span>'}
                     <span class="pin ${e.permanent ? 'active' : ''}" onclick="event.stopPropagation();togglePermanent(${e.id})" title="点击标记为永久保存">${e.permanent ? '📌' : '📍'}</span>
+                    <span style="font-size:14px;cursor:pointer;margin-left:6px;" onclick="event.stopPropagation();deleteEvent(${e.id})" title="删除">🗑</span>
                 </div>
                 <div class="summary">${e.report_summary || '(暂无报告)'}</div>
             </div>
@@ -192,6 +196,25 @@ function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 async function togglePermanent(id) {
     try {
         const resp = await fetch(`/api/events/${id}/permanent`, { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) loadEvents();
+    } catch (err) {}
+}
+
+async function deleteEvent(id) {
+    if (!confirm('确定删除此跌倒记录？')) return;
+    try {
+        const resp = await fetch(`/api/events/${id}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (data.ok) loadEvents();
+    } catch (err) {}
+}
+
+async function deleteAll() {
+    if (!confirm('确定删除全部跌倒记录？此操作不可撤销！')) return;
+    if (!confirm('再次确认：删除全部记录？')) return;
+    try {
+        const resp = await fetch('/api/events/delete_all', { method: 'POST' });
         const data = await resp.json();
         if (data.ok) loadEvents();
     } catch (err) {}
